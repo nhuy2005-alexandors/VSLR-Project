@@ -1,0 +1,469 @@
+{
+  "labels": [
+    "Cảm ơn",
+    "Chuyện gì",
+    "Xin chào"
+  ],
+  "device": "cuda",
+  "source_videos": 21,
+  "augmentations_per_video": 120,
+  "samples": 2541,
+  "train_samples": 2178,
+  "holdout_val_samples": 363,
+  "heldout_source_ids": [
+    0,
+    12,
+    18
+  ],
+  "best_epoch": 27,
+  "best_holdout_val_loss": 0.017733021646984353,
+  "holdout_val_loss": 0.017733021646984353,
+  "holdout_val_accuracy": 1.0,
+  "final_fit_epochs": 27,
+  "extraction": [
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Cảm ơn 1.mov",
+      "sampled_frames": 130,
+      "trimmed_frames": 97,
+      "hand_frame_ratio": 0.7153846153846154,
+      "label": "Cảm ơn"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Cảm ơn 2.mov",
+      "sampled_frames": 156,
+      "trimmed_frames": 112,
+      "hand_frame_ratio": 0.6666666666666666,
+      "label": "Cảm ơn"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Cảm ơn 3.mov",
+      "sampled_frames": 151,
+      "trimmed_frames": 104,
+      "hand_frame_ratio": 0.6357615894039735,
+      "label": "Cảm ơn"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Cảm ơn 4.mov",
+      "sampled_frames": 153,
+      "trimmed_frames": 110,
+      "hand_frame_ratio": 0.6666666666666666,
+      "label": "Cảm ơn"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Cảm ơn 5.mov",
+      "sampled_frames": 139,
+      "trimmed_frames": 99,
+      "hand_frame_ratio": 0.6546762589928058,
+      "label": "Cảm ơn"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Cảm ơn 6.mov",
+      "sampled_frames": 118,
+      "trimmed_frames": 104,
+      "hand_frame_ratio": 0.7627118644067796,
+      "label": "Cảm ơn"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Cảm ơn 7.mov",
+      "sampled_frames": 144,
+      "trimmed_frames": 93,
+      "hand_frame_ratio": 0.5902777777777778,
+      "label": "Cảm ơn"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Chuyện gì 1.mov",
+      "sampled_frames": 156,
+      "trimmed_frames": 142,
+      "hand_frame_ratio": 0.8782051282051282,
+      "label": "Chuyện gì"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Chuyện gì 2.mov",
+      "sampled_frames": 149,
+      "trimmed_frames": 119,
+      "hand_frame_ratio": 0.7718120805369127,
+      "label": "Chuyện gì"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Chuyện gì 3.mov",
+      "sampled_frames": 156,
+      "trimmed_frames": 126,
+      "hand_frame_ratio": 0.782051282051282,
+      "label": "Chuyện gì"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Chuyện gì 4.mov",
+      "sampled_frames": 157,
+      "trimmed_frames": 121,
+      "hand_frame_ratio": 0.732484076433121,
+      "label": "Chuyện gì"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Chuyện gì 5.mov",
+      "sampled_frames": 159,
+      "trimmed_frames": 121,
+      "hand_frame_ratio": 0.6981132075471698,
+      "label": "Chuyện gì"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Chuyện gì 6.mov",
+      "sampled_frames": 167,
+      "trimmed_frames": 141,
+      "hand_frame_ratio": 0.7964071856287425,
+      "label": "Chuyện gì"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Chuyện gì 7.mov",
+      "sampled_frames": 144,
+      "trimmed_frames": 124,
+      "hand_frame_ratio": 0.8055555555555556,
+      "label": "Chuyện gì"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Xin chào 1.mov",
+      "sampled_frames": 158,
+      "trimmed_frames": 137,
+      "hand_frame_ratio": 0.8417721518987342,
+      "label": "Xin chào"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Xin chào 2.mov",
+      "sampled_frames": 229,
+      "trimmed_frames": 184,
+      "hand_frame_ratio": 0.7860262008733624,
+      "label": "Xin chào"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Xin chào 3.mov",
+      "sampled_frames": 211,
+      "trimmed_frames": 178,
+      "hand_frame_ratio": 0.8246445497630331,
+      "label": "Xin chào"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Xin chào 4.mov",
+      "sampled_frames": 173,
+      "trimmed_frames": 133,
+      "hand_frame_ratio": 0.7225433526011561,
+      "label": "Xin chào"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Xin chào 5.mov",
+      "sampled_frames": 192,
+      "trimmed_frames": 147,
+      "hand_frame_ratio": 0.7239583333333334,
+      "label": "Xin chào"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Xin chào 6.mov",
+      "sampled_frames": 202,
+      "trimmed_frames": 164,
+      "hand_frame_ratio": 0.7673267326732673,
+      "label": "Xin chào"
+    },
+    {
+      "video": "D:\\Dev\\Workspaces\\VSLR-Workspace\\Người thiệt-20260819T055130Z-1-001\\Người thiệt\\Xin chào 7.mov",
+      "sampled_frames": 130,
+      "trimmed_frames": 129,
+      "hand_frame_ratio": 0.9307692307692308,
+      "label": "Xin chào"
+    }
+  ],
+  "warning": "Validation holds out one complete source video per class, so augmentations from a held-out clip never enter training. With only three source clips per class (and likely the same signer/setup), this is still a small prototype estimate, not a real-world accuracy claim. The saved final checkpoint is then refit on all source videos for camera testing.",
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.4269047664380927,
+      "train_accuracy": 0.8567493112947658,
+      "holdout_val_loss": 0.3550682001267419,
+      "holdout_val_accuracy": 0.7823691460055097
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.11959591223298136,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.022593716015787822,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.11653916617125082,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.021341035517122464,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.11584897119042192,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.022362505678426136,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.1157598881422105,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.020425755109832962,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.11555624780603457,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.020623352773713344,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.11526858124495429,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.022913775024499445,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.11537927021747121,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.018668622748295137,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 9,
+      "train_loss": 0.11550993044733235,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.01867973604868102,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 10,
+      "train_loss": 0.1151894469932748,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.021600863632050757,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 11,
+      "train_loss": 0.11513241504971537,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.0198182762438847,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 12,
+      "train_loss": 0.11512371381835394,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.021107946720087166,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 13,
+      "train_loss": 0.11500783807181568,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.023318727657239954,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 14,
+      "train_loss": 0.11503563239773662,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.01787068207617387,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 15,
+      "train_loss": 0.11494903338951622,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.023140602347443584,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 16,
+      "train_loss": 0.11492906466359058,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.09193550658312218,
+      "holdout_val_accuracy": 0.9669421487603306
+    },
+    {
+      "epoch": 17,
+      "train_loss": 0.1581286645132648,
+      "train_accuracy": 0.977961432506887,
+      "holdout_val_loss": 0.6920403476866069,
+      "holdout_val_accuracy": 0.6666666666666666
+    },
+    {
+      "epoch": 18,
+      "train_loss": 0.24701129846938494,
+      "train_accuracy": 0.9375573921028466,
+      "holdout_val_loss": 0.10162720955990398,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 19,
+      "train_loss": 0.11878367939654351,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.01861712699832995,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 20,
+      "train_loss": 0.11678319910833658,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.021234262293363733,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 21,
+      "train_loss": 0.11664893238012455,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.02006239446069912,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 22,
+      "train_loss": 0.11649989067851348,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.01977452404345527,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 23,
+      "train_loss": 0.1164871922003993,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.02038227190512435,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 24,
+      "train_loss": 0.11581856509049733,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.018470591960408143,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 25,
+      "train_loss": 0.11607937876706391,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.020012515943405057,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 26,
+      "train_loss": 0.11575736556308219,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.02006525895237594,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 27,
+      "train_loss": 0.11567947869868975,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.017733021646984353,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 28,
+      "train_loss": 0.11531430620381983,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.020027152542281414,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 29,
+      "train_loss": 0.11572844473537335,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.021547034921601784,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 30,
+      "train_loss": 0.11549194018237628,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.019485862320160734,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 31,
+      "train_loss": 0.11532090306008376,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.021174351738627292,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 32,
+      "train_loss": 0.1154460219941739,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.02130961216493579,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 33,
+      "train_loss": 0.11549108368716621,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.021095642383844072,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 34,
+      "train_loss": 0.11514061109203062,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.02121930758240466,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 35,
+      "train_loss": 0.11523091754062774,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.020816236098114782,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 36,
+      "train_loss": 0.11518270998536391,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.02213648174563551,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 37,
+      "train_loss": 0.11493195792449735,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.019841367532768526,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 38,
+      "train_loss": 0.11482657931396127,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.02144760808833046,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 39,
+      "train_loss": 0.11518015117958338,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.020882768407669276,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 40,
+      "train_loss": 0.11520327780912293,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.019046928941403047,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 41,
+      "train_loss": 0.11491218005384843,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.021243881275133325,
+      "holdout_val_accuracy": 1.0
+    },
+    {
+      "epoch": 42,
+      "train_loss": 0.11500111791494246,
+      "train_accuracy": 1.0,
+      "holdout_val_loss": 0.021056219294010442,
+      "holdout_val_accuracy": 1.0
+    }
+  ]
+}

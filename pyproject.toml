@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vslr-three-gestures"
+version = "0.1.0"
+description = "MediaPipe + BiLSTM prototype for three Vietnamese sign gestures"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26,<2",
+  "opencv-contrib-python==4.11.0.86",
+  "mediapipe==0.10.21",
+  "protobuf>=4.25.3,<5",
+  "torch",
+]
+
+[project.optional-dependencies]
+tts = ["pyttsx3"]
+
+[project.scripts]
+vslr-train = "prototype_3_gestures.prepare_train:main"
+vslr-camera = "prototype_3_gestures.realtime:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

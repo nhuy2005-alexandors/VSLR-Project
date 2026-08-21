@@ -1,0 +1,13 @@
+*.npy
+*.mp4
+*.npz
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Large local data and generated artifacts
+dataset/legacy/
+dataset/processed/*.npz
