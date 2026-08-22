@@ -15,15 +15,21 @@ from prototype_3_gestures.prepare_train import (
     SINGLE_SIGNER,
     Clip,
     GestureDataset,
+    build_eval_loader,
     build_parser,
     cache_key,
     discover_clips,
+    evaluate,
     extract_with_cache,
     missing_labels_after_drop,
     parse_video_specs,
     signer_split,
+    suspect_clips,
+    training_signature,
     train_model,
     validate_clips,
+    validate_expected_labels,
+    worst_labels,
 )
 from prototype_3_gestures.check import (
     clip_status,
@@ -225,14 +231,17 @@ class ModelTests(unittest.TestCase):
             model = GestureLSTM(FEATURE_DIM, 3, pooling="legacy_last_step")
             save_checkpoint(path, model, ["a", "b", "c"], {"input_dim": FEATURE_DIM, "pooling": "legacy_last_step"})
 
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
+            with self.assertRaisesRegex(ValueError, "FEATURES_VERSION"):
                 load_checkpoint(path)
 
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                loaded, _, _ = load_checkpoint(path, allow_incompatible_features=True)
+
             messages = " ".join(str(w.message) for w in caught)
-            if FEATURES_VERSION != 1:
-                self.assertIn("FEATURES_VERSION", messages)
-                self.assertIn("retrain", messages.lower())
+            self.assertEqual(loaded.pooling, "legacy_last_step")
+            self.assertIn("FEATURES_VERSION", messages)
+            self.assertIn("retrain", messages.lower())
 
     def test_legacy_pooling_stays_reproducible_for_old_checkpoints(self):
         model = GestureLSTM(FEATURE_DIM, 3, hidden_size=4, pooling="legacy_last_step")
@@ -264,6 +273,17 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual({c.person for c in clips}, {"P1", "P2"})
         self.assertEqual({c.label for c in clips}, {"Cảm ơn", "Xin chào"})
         self.assertTrue(all(c.path.suffix.lower() in {".mov", ".mp4"} for c in clips))
+
+    def test_discover_normalises_macos_style_nfd_labels(self):
+        nfd = unicodedata.normalize("NFD", "Cảm ơn")
+        with TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "P1" / nfd
+            folder.mkdir(parents=True)
+            (folder / "01.mov").touch()
+
+            clips = discover_clips(tmp)
+
+        self.assertEqual(clips[0].label, "Cảm ơn")
 
     def test_parse_video_specs_marks_every_clip_single_signer(self):
         with TemporaryDirectory() as tmp:
@@ -315,6 +335,24 @@ class ValidationTests(unittest.TestCase):
 
         self.assertEqual(missing_labels_after_drop(expected, survivors), ["Mèo"])
         self.assertEqual(missing_labels_after_drop(expected, survivors + [_clip("Mèo", "P1")]), [])
+
+    def test_manifest_catches_a_label_missing_for_every_person(self):
+        clips = [_clip("Cảm ơn", "P1"), _clip("Cảm ơn", "P2")]
+
+        with self.assertRaises(ValueError) as ctx:
+            validate_expected_labels(clips, ["Cảm ơn", "Xin chào"])
+
+        self.assertIn("Xin chào", str(ctx.exception))
+
+    def test_manifest_rejects_unexpected_slug_directories(self):
+        clips = [_clip("cam_on", "P1"), _clip("cam_on", "P2")]
+
+        with self.assertRaises(ValueError) as ctx:
+            validate_expected_labels(clips, ["Cảm ơn"])
+
+        message = str(ctx.exception)
+        self.assertIn("Cảm ơn", message)
+        self.assertIn("cam_on", message)
 
     def test_video_mode_refuses_loso(self):
         with TemporaryDirectory() as tmp:
@@ -452,6 +490,86 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(cached_stats["hand_frame_ratio"], 0.8)
             self.assertEqual(list(cache_dir.glob("*.tmp")), [])
 
+    def test_readable_but_invalid_cache_is_reextracted(self):
+        class StubExtractor:
+            def __init__(self):
+                self.calls = 0
+
+            def extract_video(self, path, target_len):
+                self.calls += 1
+                return (
+                    np.zeros((target_len, FEATURE_DIM), dtype=np.float32),
+                    {"video": str(path), "sampled_frames": 50, "trimmed_frames": 40, "hand_frame_ratio": 0.8},
+                )
+
+        invalid_sequences = (
+            np.zeros((1, FEATURE_DIM), dtype=np.float32),
+            np.full((SEQUENCE_LENGTH, FEATURE_DIM), np.nan, dtype=np.float32),
+        )
+        for invalid in invalid_sequences:
+            with self.subTest(shape=invalid.shape, finite=bool(np.isfinite(invalid).all())):
+                with TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    video = root / "P1" / "Cảm ơn" / "01.mov"
+                    video.parent.mkdir(parents=True)
+                    video.touch()
+                    clip = Clip(label="Cảm ơn", person="P1", path=video)
+                    cache_dir = root / "cache"
+                    cache_dir.mkdir()
+                    cached = cache_dir / f"{cache_key(video, video.stat().st_mtime)}.npz"
+                    np.savez(
+                        cached,
+                        sequence=invalid,
+                        sampled_frames=50,
+                        trimmed_frames=40,
+                        hand_frame_ratio=0.8,
+                    )
+
+                    extractor = StubExtractor()
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        sequence, stats = extract_with_cache(clip, extractor, cache_dir)
+
+                self.assertEqual(extractor.calls, 1)
+                self.assertFalse(stats["from_cache"])
+                self.assertEqual(sequence.shape, (SEQUENCE_LENGTH, FEATURE_DIM))
+
+
+class TrainingSignatureTests(unittest.TestCase):
+    def test_every_training_input_changes_the_signature(self):
+        metadata = {
+            "data_fingerprint": "abc",
+            "labels": ["Cảm ơn", "Xin chào"],
+            "epochs": 40,
+            "augmentations_per_clip": 120,
+            "batch_size": 32,
+            "learning_rate": 1e-3,
+            "seed": 42,
+            "pooling": "fwd_last_bwd_first",
+            "features_version": FEATURES_VERSION,
+            "num_workers": 0,
+        }
+        baseline = training_signature(metadata)
+
+        for field in (
+            "data_fingerprint",
+            "labels",
+            "epochs",
+            "augmentations_per_clip",
+            "batch_size",
+            "learning_rate",
+            "seed",
+            "pooling",
+            "features_version",
+        ):
+            changed = dict(metadata)
+            changed[field] = f"different-{field}"
+            with self.subTest(field=field):
+                self.assertNotEqual(training_signature(changed), baseline)
+
+        worker_only = dict(metadata, num_workers=4)
+        self.assertEqual(training_signature(worker_only), baseline)
+
 
 class TrainLoopTests(unittest.TestCase):
     """Locks the history-row contract that the LOSO fold summary reads."""
@@ -504,6 +622,10 @@ class ArgumentTests(unittest.TestCase):
             ["--data-dir", "x", "--augment", "-1"],
             ["--data-dir", "x", "--seed", "-1"],
             ["--data-dir", "x", "--num-workers", "-1"],
+            ["--data-dir", "x", "--min-hand-ratio", "0"],
+            ["--data-dir", "x", "--min-hand-ratio", "1.1"],
+            ["--data-dir", "x", "--learning-rate", "0"],
+            ["--data-dir", "x", "--learning-rate", "nan"],
         ):
             with self.assertRaises(SystemExit, msg=f"{bad} should be rejected"):
                 parser.parse_args(bad)
@@ -516,6 +638,99 @@ class ArgumentTests(unittest.TestCase):
 
         args = build_parser().parse_args(["--data-dir", "x", "--epochs", "1", "--augment", "0"])
         self.assertEqual((args.epochs, args.augment, args.num_workers, args.loso), (1, 0, 0, False))
+        self.assertEqual(args.labels_file, "dataset/labels.txt")
+        self.assertEqual(args.min_hand_ratio, 0.5)
+
+
+class EvaluationTests(unittest.TestCase):
+    def _model_and_loader(self, n_clips=6, n_classes=3):
+        sequences = [
+            np.full((SEQUENCE_LENGTH, FEATURE_DIM), float(i) + 1.0, dtype=np.float32) for i in range(n_clips)
+        ]
+        targets = [i % n_classes for i in range(n_clips)]
+        args = Namespace(batch_size=4, seed=42)
+        return GestureLSTM(FEATURE_DIM, n_classes), build_eval_loader(sequences, targets, args), targets
+
+    def test_evaluate_returns_one_row_per_clip_in_loader_order(self):
+        """The join that names a failing clip rests on this: row i is clip i.
+
+        It holds only because the eval loader is unshuffled AND unaugmented. Nothing else in the
+        pipeline enforces that, so it is locked here.
+        """
+        model, loader, targets = self._model_and_loader(n_clips=7)
+
+        loss, accuracy, rows = evaluate(model, loader, torch.device("cpu"))
+
+        self.assertEqual(len(rows), len(targets))
+        self.assertEqual([row["target"] for row in rows], targets)
+        self.assertGreaterEqual(loss, 0.0)
+        self.assertAlmostEqual(accuracy, sum(r["target"] == r["predicted"] for r in rows) / len(rows))
+
+    def test_evaluate_confidence_is_softmax_max_like_the_demo(self):
+        """`--confidence` in realtime compares against softmax-max, so the report must too."""
+        model, loader, _ = self._model_and_loader()
+
+        _, _, rows = evaluate(model, loader, torch.device("cpu"))
+
+        for row in rows:
+            self.assertGreater(row["confidence"], 1.0 / 3.0 - 1e-6)
+            self.assertLessEqual(row["confidence"], 1.0)
+
+        features, _ = next(iter(loader))
+        with torch.no_grad():
+            expected = torch.softmax(model(features), dim=1).max(dim=1).values
+        for row, value in zip(rows, expected.tolist()):
+            self.assertAlmostEqual(row["confidence"], value, places=6)
+
+    def test_worst_labels_ranks_by_accuracy_and_names_the_confusion(self):
+        predictions = [
+            {"label": "Mèo", "predicted": "Cảm ơn", "correct": False},
+            {"label": "Mèo", "predicted": "Cảm ơn", "correct": False},
+            {"label": "Mèo", "predicted": "Mèo", "correct": True},
+            {"label": "Cảm ơn", "predicted": "Cảm ơn", "correct": True},
+            {"label": "Cảm ơn", "predicted": "Cảm ơn", "correct": True},
+            {"label": "Xin chào", "predicted": "Mèo", "correct": False},
+        ]
+
+        worst = worst_labels(predictions, limit=2)
+
+        self.assertEqual(worst[0]["label"], "Xin chào")
+        self.assertEqual(worst[0]["accuracy"], 0.0)
+        self.assertEqual(worst[0]["confused_with"], "Mèo")
+        self.assertEqual(worst[1]["label"], "Mèo")
+        self.assertAlmostEqual(worst[1]["accuracy"], 1 / 3)
+        self.assertEqual(worst[1]["confused_with"], "Cảm ơn")
+        self.assertNotIn("Cảm ơn", [row["label"] for row in worst], "a perfect label is not 'worst'")
+
+    def test_suspect_clips_needs_both_a_wrong_prediction_and_a_low_hand_ratio(self):
+        """"Below the median" would be self-fulfilling: half of any set is below its own median."""
+        predictions = [
+            {"video": "a.mov", "label": "Mèo", "predicted": "Cảm ơn", "correct": False},
+            {"video": "b.mov", "label": "Mèo", "predicted": "Cảm ơn", "correct": False},
+            {"video": "c.mov", "label": "Mèo", "predicted": "Mèo", "correct": True},
+        ]
+        extraction = [
+            {"video": "a.mov", "hand_frame_ratio": 0.31},
+            {"video": "b.mov", "hand_frame_ratio": 0.88},
+            {"video": "c.mov", "hand_frame_ratio": 0.12},
+        ]
+
+        suspects = suspect_clips(predictions, extraction, min_hand_ratio=0.5)
+
+        self.assertEqual([row["video"] for row in suspects], ["a.mov"])
+        self.assertAlmostEqual(suspects[0]["hand_frame_ratio"], 0.31)
+
+    def test_suspect_clips_is_empty_when_every_clip_was_recorded_well(self):
+        predictions = [{"video": "a.mov", "label": "Mèo", "predicted": "Cảm ơn", "correct": False}]
+        extraction = [{"video": "a.mov", "hand_frame_ratio": 0.91}]
+
+        self.assertEqual(suspect_clips(predictions, extraction, min_hand_ratio=0.5), [])
+
+    def test_suspect_clips_refuses_a_broken_prediction_extraction_join(self):
+        predictions = [{"video": "missing.mov", "label": "Mèo", "predicted": "Cảm ơn", "correct": False}]
+
+        with self.assertRaisesRegex(ValueError, "missing.mov"):
+            suspect_clips(predictions, [], min_hand_ratio=0.5)
 
 
 class SegmentTrackerTests(unittest.TestCase):
@@ -565,6 +780,18 @@ class SegmentTrackerTests(unittest.TestCase):
             self.assertEqual(len(segments), 1, f"fps={fps}")
             self.assertFalse(segments[0].forced, f"fps={fps}")
             self.assertAlmostEqual(segments[0].duration, 2.5, delta=0.5, msg=f"fps={fps}")
+
+    def test_active_duration_excludes_the_word_gap_tail(self):
+        tracker = SegmentTracker(word_gap=0.45, max_seconds=5.0)
+
+        self.assertIsNone(tracker.feed(True, np.zeros(3), now=0.0))
+        self.assertIsNone(tracker.feed(False, np.zeros(3), now=0.1))
+        segment = tracker.feed(False, np.zeros(3), now=0.46)
+
+        self.assertIsNotNone(segment)
+        self.assertEqual(segment.end_time, 0.46)
+        self.assertEqual(segment.duration, 0.0, "one detected hand frame has zero active duration")
+        self.assertLess(segment.duration, 0.35, "the default minimum must reject this blip")
 
     def test_slow_gesture_does_not_become_two_words(self):
         """After a forced cut the rest of the gesture is discarded, not turned into a second word."""
@@ -669,6 +896,7 @@ class CheckToolTests(unittest.TestCase):
         self.assertEqual(clip_status(None, ValueError("Cannot open video: a.mov"), 0.5), "KHONG MO DUOC")
         self.assertEqual(clip_status(None, ValueError("has too few readable frames (3)"), 0.5), "QUA NGAN")
         self.assertEqual(clip_status(None, ValueError("detected hands in only 4.0%"), 0.5), "KHONG THAY TAY")
+        self.assertEqual(clip_status(None, PermissionError("Access is denied"), 0.5), "LOI HE THONG")
         self.assertEqual(clip_status({"hand_frame_ratio": 0.41}, None, 0.5), "QUAY LAI")
         self.assertEqual(clip_status({"hand_frame_ratio": 0.5}, None, 0.5), "ok")
 

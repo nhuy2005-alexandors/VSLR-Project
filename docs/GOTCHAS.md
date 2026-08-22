@@ -51,7 +51,7 @@ Bẫy đã gặp. Tích lũy, không xóa. Gặp bẫy mới → append.
 
 - **Symptom**: sau khi bump `FEATURES_VERSION` 1 → 2, load `models/gesture_lstm.pt` chỉ ra **một** cảnh báo (về `pooling`), không cảnh báo nào về landmark — dù checkpoint đó được train trên landmark v1 và extractor hiện tại sinh v2.
 - **Cause**: `load_checkpoint` viết `if stored is not None and stored != FEATURES_VERSION`. Checkpoint cũ **không có** khóa `features_version` (nó ra đời trước khóa đó), nên `stored is None` và phép so sánh bị bỏ qua hoàn toàn. Tức đúng những artifact dễ cũ nhất là những artifact được miễn kiểm.
-- **Avoidance/fix**: thiếu khóa nghĩa là "viết trước khi có khóa" = **version 1**, không phải "không cần kiểm". `int(config.get("features_version", 1))`. Cùng logic với `pooling` thiếu → `legacy_last_step`. Test `test_checkpoint_without_features_version_is_treated_as_version_one` khóa hành vi.
+- **Avoidance/fix**: thiếu khóa nghĩa là "viết trước khi có khóa" = **version 1**, không phải "không cần kiểm". `int(config.get("features_version", 1))`. Lệch version giờ **raise mặc định**; chỉ `allow_incompatible_features=True` / `--allow-incompatible-model` mới đi tiếp kèm cảnh báo. Cùng logic với `pooling` thiếu → `legacy_last_step`.
 - **Bài học rộng hơn**: mỗi lần thêm một khóa metadata để phát hiện lệch, phải quyết **giá trị mặc định cho artifact chưa có khóa đó** ngay trong cùng lần sửa. Mặc định `None` + `is not None` là cách tự vô hiệu hóa cái guard vừa viết.
 
 ## Benchmark trên CPU chưa nguội cho số sai gấp 2–3 lần
@@ -70,7 +70,7 @@ Bẫy đã gặp. Tích lũy, không xóa. Gặp bẫy mới → append.
 
 - **Symptom**: `UnicodeEncodeError: 'charmap' codec can't encode character 'ả'` khi in nhãn `Cảm ơn`.
 - **Cause**: stdout Windows mặc định cp1252.
-- **Avoidance/fix**: đặt `PYTHONIOENCODING=utf-8` trước khi chạy script có in nhãn tiếng Việt; luôn mở file JSON bằng `encoding="utf-8"`.
+- **Avoidance/fix**: ba CLI gọi `configure_utf8_stdio()` nên chạy được cả khi người dùng quên biến môi trường; file JSON vẫn luôn mở bằng `encoding="utf-8"`.
 
 ## BiLSTM lấy `out[:, -1, :]` làm bỏ không một nửa model
 
@@ -100,3 +100,27 @@ Bẫy đã gặp. Tích lũy, không xóa. Gặp bẫy mới → append.
   savez(open handle)      -> ['b.npz.tmp']
   ```
 - **Avoidance/fix**: truyền **file handle** đã mở, không truyền path: `with open(staging, "wb") as fh: np.savez(fh, ...)`. Giữ pattern ghi-rồi-rename để một run bị ngắt không để lại cache entry hỏng.
+
+## Một frame thấy tay vẫn qua `--min-seconds` vì duration ăn cả word gap
+
+- **Symptom**: `word_gap=0,45`, `min_seconds=0,35`; đúng một frame thấy tay ở `t=0`, hai frame không tay ở `t=0,10/0,46` tạo segment `duration=0,46` và bị đem đi classify.
+- **Cause**: `Segment.end_time` là lúc gap đủ dài để đóng biên, không phải frame cuối còn thấy tay. Lấy `end_time - start_time` cộng toàn bộ idle tail vào độ dài cử chỉ, nên khi `word_gap > min_seconds` bộ lọc tối thiểu vô hiệu theo cấu trúc.
+- **Avoidance/fix**: `Segment` giữ riêng `active_end_time=last_hand_time`; `duration` chỉ là active span, còn `end_time` vẫn giữ thời điểm đóng biên. Test một-frame khóa `duration == 0`.
+
+## Nhãn vắng ở tất cả người ký là vô hình nếu chỉ nhìn cây
+
+- **Symptom**: hai người cùng có `Cảm ơn` nhưng cùng quên `Xin chào`; `validate_clips(..., loso=True)` vẫn pass vì bài toán một lớp tự nhất quán.
+- **Cause**: tập "expected" cũ được suy từ chính clip đã discover. Không có thư mục thì không có dữ kiện để biết nhãn từng được mong đợi.
+- **Avoidance/fix**: `vslr-train --data-dir` bắt buộc đối chiếu `dataset/labels.txt` trước extract; thiếu toàn cục hoặc thừa slug đều exit 1 và chưa tạo `model-dir`.
+
+## Cache `.npz` đọc được chưa có nghĩa là cache hợp lệ
+
+- **Symptom**: entry có đủ key nhưng sequence shape `(1, 201)` hoặc chứa NaN vẫn được trả `from_cache=True`; run chỉ chết muộn trong LayerNorm/DataLoader.
+- **Cause**: đường cache-hit chỉ `.astype(np.float32)` và đọc scalar, không kiểm contract `(SEQUENCE_LENGTH, FEATURE_DIM)` hay finite/range.
+- **Avoidance/fix**: `_read_cache_entry` kiểm shape `(60, 201)`, finite values, frame counts và `hand_frame_ratio`; sai thì xóa, cảnh báo và re-extract như cache ZIP hỏng.
+
+## Cùng data fingerprint chưa đủ để gọi LOSO là số của checkpoint
+
+- **Symptom**: LOSO chạy `--augment 0 --learning-rate 1e-4`, ship chạy mặc định 120 / `1e-3`; fingerprint/epochs/seed/features vẫn khớp nhưng hai quy trình khác hẳn.
+- **Cause**: hướng dẫn ghép artifact cũ chỉ liệt kê bốn khóa, dù metadata đã có batch size, learning rate và augmentation.
+- **Avoidance/fix**: chỉ ghép khi `training_signature` khớp; hash bao phủ mọi training input liên quan và thứ tự nhãn. Ship in rõ `PAIR OK`/`PAIR MISMATCH` nếu report tồn tại.

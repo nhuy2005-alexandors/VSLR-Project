@@ -12,19 +12,11 @@ import cv2
 import numpy as np
 import torch
 
+from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import HolisticExtractor, resample_sequence
 from .vsl3.model import load_checkpoint, predict_sequence
 
-if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-if sys.stderr and hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+configure_utf8_stdio()
 
 
 def speak_text(text: str) -> None:
@@ -72,16 +64,18 @@ def should_accept_prediction(confidence: float, threshold: float) -> bool:
 
 @dataclass(frozen=True)
 class Segment:
-    """One completed gesture: the frames, when it ran, and whether the cap cut it short."""
+    """One completed gesture and both its active and boundary timestamps."""
 
     features: list[np.ndarray]
     start_time: float
+    active_end_time: float
     end_time: float
     forced: bool
 
     @property
     def duration(self) -> float:
-        return self.end_time - self.start_time
+        """Time from first to last hand detection; excludes the trailing no-hand word gap."""
+        return self.active_end_time - self.start_time
 
 
 class SegmentTracker:
@@ -152,7 +146,13 @@ class SegmentTracker:
 
     def _close(self, now: float, forced: bool) -> Segment:
         done, self.segment, self.in_segment = self.segment, [], False
-        return Segment(features=done, start_time=self.start_time, end_time=now, forced=forced)
+        return Segment(
+            features=done,
+            start_time=self.start_time,
+            active_end_time=self.last_hand_time,
+            end_time=now,
+            forced=forced,
+        )
 
 
 def main() -> None:
@@ -177,6 +177,12 @@ def main() -> None:
         "that gesture is discarded until the hands come down, so keep it above the slowest "
         "gesture you intend to sign.",
     )
+    parser.add_argument(
+        "--allow-incompatible-model",
+        action="store_true",
+        help="Explicitly allow a checkpoint trained with another FEATURES_VERSION. Predictions may "
+        "be unreliable; intended only for a temporary legacy demo before retraining.",
+    )
     parser.add_argument("--no-tts", action="store_true")
     args = parser.parse_args()
     if not 0.0 < args.confidence <= 1.0:
@@ -193,7 +199,11 @@ def main() -> None:
         )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, labels, config = load_checkpoint(Path(args.model), device)
+    model, labels, config = load_checkpoint(
+        Path(args.model),
+        device,
+        allow_incompatible_features=args.allow_incompatible_model,
+    )
     seq_len = int(config["sequence_length"])
     print(f"Loaded labels: {labels}")
     print("Controls: Q quit | C clear sentence | S speak now | SPACE force current gesture boundary")

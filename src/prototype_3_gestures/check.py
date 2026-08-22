@@ -11,7 +11,6 @@ phải cổng.
 from __future__ import annotations
 
 import argparse
-import unicodedata
 from pathlib import Path
 
 from .prepare_train import (
@@ -21,38 +20,15 @@ from .prepare_train import (
     label_order,
     non_negative_int,
 )
+from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import HolisticExtractor
+from .vsl3.labels import DEFAULT_LABELS_FILE, normalise_label, read_expected_labels
 
-DEFAULT_LABELS_FILE = "dataset/labels.txt"
-
-
-def normalise_label(text: str) -> str:
-    """NFC. Tên NFD (kiểu macOS) in ra giống hệt NFC nhưng là chuỗi khác."""
-    return unicodedata.normalize("NFC", text.strip())
-
-
-def read_expected_labels(path: str | Path) -> list[str]:
-    """Danh sách nhãn mong đợi, một nhãn mỗi dòng; `#` là chú thích.
-
-    Phải là file chứ không suy từ cây: nhãn chưa ai quay thì không thể xuất hiện trong cây,
-    nên cây không bao giờ nói được là còn thiếu gì.
-    """
-    lines = Path(path).read_text(encoding="utf-8").splitlines()
-    labels: list[str] = []
-    for raw in lines:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        label = normalise_label(raw)
-        if label in labels:
-            raise ValueError(f"Nhãn '{label}' xuất hiện hai lần trong {path}")
-        labels.append(label)
-    if not labels:
-        raise ValueError(f"{path} không có nhãn nào")
-    return labels
+configure_utf8_stdio()
 
 
 def clip_status(stats: dict | None, error: Exception | None, min_hand_ratio: float) -> str:
-    """Ba nguyên nhân lỗi tách riêng, vì ba hành động khác nhau.
+    """Classify known recording failures without disguising system failures as bad video.
 
     'KHONG MO DUOC' thường là lỗi truyền file, không phải lỗi quay.
     """
@@ -62,7 +38,9 @@ def clip_status(stats: dict | None, error: Exception | None, min_hand_ratio: flo
             return "KHONG MO DUOC"
         if "too few readable frames" in message:
             return "QUA NGAN"
-        return "KHONG THAY TAY"
+        if "detected hands in only" in message:
+            return "KHONG THAY TAY"
+        return "LOI HE THONG"
     assert stats is not None
     return "QUAY LAI" if stats["hand_frame_ratio"] < min_hand_ratio else "ok"
 
@@ -103,7 +81,7 @@ def discover_single_person(data_dir: str | Path, person: str) -> list[Clip]:
     if not data_dir.is_dir():
         raise NotADirectoryError(f"--data-dir không phải thư mục: {data_dir}")
     clips = [
-        Clip(label=label_dir.name, person=person, path=path.resolve())
+        Clip(label=normalise_label(label_dir.name), person=person, path=path.resolve())
         for label_dir in sorted(p for p in data_dir.iterdir() if p.is_dir())
         for path in sorted(label_dir.iterdir())
         if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
@@ -168,17 +146,20 @@ def main() -> None:
         )
 
     print(f"\nKiểm {len(clips)} clip (cache: {args.cache_dir})\n")
-    rows: list[tuple[str, Clip, dict | None]] = []
+    rows: list[tuple[str, Clip, dict | None, str | None]] = []
     cache_dir = Path(args.cache_dir)
     with HolisticExtractor() as extractor:
         for position, clip in enumerate(clips, start=1):
             try:
                 _, stats = extract_with_cache(clip, extractor, cache_dir)
                 status = clip_status(stats, None, args.min_hand_ratio)
+                error_text = None
             except Exception as exc:
                 stats, status = None, clip_status(None, exc, args.min_hand_ratio)
-            rows.append((status, clip, stats))
-            print(f"  [{position}/{len(clips)}] {status:15s} {clip.person}/{clip.label}/{clip.path.name}")
+                error_text = f"{type(exc).__name__}: {exc}"
+            rows.append((status, clip, stats, error_text))
+            detail = f" | {error_text}" if error_text else ""
+            print(f"  [{position}/{len(clips)}] {status:15s} {clip.person}/{clip.label}/{clip.path.name}{detail}")
 
     _print_report(rows, clips, expected_labels, args)
 
@@ -190,14 +171,18 @@ def _print_report(rows, clips: list[Clip], expected_labels: list[str] | None, ar
     print(f"\n{'trạng thái':16s} {'người/nhãn':34s} {'file':26s} {'sampled':>8s} {'trimmed':>8s} {'tay':>7s}")
     print("-" * 104)
     # Lỗi trước, rồi tăng dần theo hand_frame_ratio: dòng đầu tiên là clip đáng lo nhất.
-    for status, clip, stats in sorted(bad, key=lambda r: (r[2] is not None, r[2]["hand_frame_ratio"] if r[2] else -1.0)):
+    for status, clip, stats, error_text in sorted(
+        bad, key=lambda r: (r[2] is not None, r[2]["hand_frame_ratio"] if r[2] else -1.0)
+    ):
         s = stats or {}
         ratio = f"{s['hand_frame_ratio']:.1%}" if stats else "-"
         print(
             f"{status:16s} {clip.person + '/' + clip.label:34.34s} {clip.path.name:26.26s} "
             f"{s.get('sampled_frames', '-'):>8} {s.get('trimmed_frames', '-'):>8} {ratio:>7s}"
         )
-    for status, clip, stats in sorted(ok, key=lambda r: r[2]["hand_frame_ratio"])[:5]:
+        if error_text:
+            print(f"{'':16s} {'':34s} -> {error_text}")
+    for status, clip, stats, _ in sorted(ok, key=lambda r: r[2]["hand_frame_ratio"])[:5]:
         print(
             f"{status:16s} {clip.person + '/' + clip.label:34.34s} {clip.path.name:26.26s} "
             f"{stats['sampled_frames']:>8} {stats['trimmed_frames']:>8} {stats['hand_frame_ratio']:>6.1%}"
@@ -208,7 +193,8 @@ def _print_report(rows, clips: list[Clip], expected_labels: list[str] | None, ar
     problems = len(bad)
     print(f"\n{len(ok)} clip ok, {problems} clip cần xử lý.")
     if bad:
-        print("  KHONG MO DUOC = lỗi file/truyền, không phải lỗi quay. QUA NGAN / KHONG THAY TAY / QUAY LAI = quay lại.")
+        print("  KHONG MO DUOC = lỗi file/truyền. QUA NGAN / KHONG THAY TAY / QUAY LAI = quay lại.")
+        print("  LOI HE THONG = không quay lại; sửa lỗi quyền/cache/phần mềm ghi ngay dưới clip.")
 
     gaps = None
     if expected_labels is not None:

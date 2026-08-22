@@ -77,6 +77,8 @@ Audit tìm ra một lỗi trong pipeline **đã commit** trước đó: landmark
 
 `--max-frames`/`--min-frames` đã thành `--max-seconds` (5,0) / `--min-seconds` (0,35), và `SegmentTracker.feed` trả về một `Segment` mang `start_time`/`end_time`/`forced` thay vì một list trần.
 
+Sửa audit sau đó: `end_time` là lúc `word_gap` hết nên không được dùng làm độ dài active. `Segment` hiện có thêm `active_end_time`; `duration = active_end_time - start_time`. Một frame thấy tay không còn tự vượt `min_seconds` chỉ vì chờ 0,45 giây để đóng biên.
+
 Lý do đo được: clip trong `dataset/raw` là 59,96 fps, còn MediaPipe trên máy này chạy 19,5–21,5 fps (46,6 ms/frame ở 1080p). Nên `--max-frames 300` là **5,0 giây** khi đọc file nhưng **14,0 giây** trên webcam. Nguyên mẫu đo cùng một cử chỉ 8 giây ở hai nhịp frame: ngưỡng frame cắt ở 60 fps mà **không** cắt ở 21,5 fps; ngưỡng giây cắt đúng 5,0 giây ở cả hai. Test `test_cap_is_the_same_duration_at_any_frame_rate` khóa điều đó.
 
 Quan trọng cho bước sau: không có việc này thì `vslr-sentence` (đo ghép câu từ file) không thể tái lập hành vi demo.
@@ -93,7 +95,6 @@ Quan trọng cho bước sau: không có việc này thì `vslr-sentence` (đo g
 ## Verify
 
 ```powershell
-$env:PYTHONIOENCODING="utf-8"
 python -m pytest          # 35 passed
 vslr-camera --no-tts      # can camera, chua chay duoc trong moi truong nay
 ```

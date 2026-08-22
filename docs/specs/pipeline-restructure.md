@@ -1,6 +1,6 @@
 # Spec — Tái cấu trúc pipeline train
 
-_Viết: 2026-08-22. Rev 2 sau `spec-critic` (verdict rev 1: BLOCKED — 5 blocker / 9 should-fix). Trạng thái: chưa code._
+_Viết: 2026-08-22. Rev 2 sau `spec-critic` (verdict rev 1: BLOCKED — 5 blocker / 9 should-fix). **Đã implement**; as-built ở `docs/technical_specs/pipeline-restructure.md` và `video-ingest-readiness.md`._
 
 ## Goal
 

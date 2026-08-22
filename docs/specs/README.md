@@ -9,3 +9,9 @@ Mỗi feature → 1 file `<feature>.md` viết TRƯỚC khi code:
 - **Out of scope**: vòng này KHÔNG làm gì.
 
 Spec xong, trước khi viết dòng code đầu tiên: chạy `spec-critic` nếu feature đụng nhiều hơn một file, hoặc đụng data model / pipeline train / cách báo số liệu.
+
+Trạng thái:
+
+- `pipeline-restructure.md` — đã implement.
+- `dataset-recording.md` — chưa quay; chờ chốt manifest nhãn.
+- `record-to-test.md` — lỗ hổng 1–2 đã implement, lỗ hổng 3 (`vslr-sentence`) pending.

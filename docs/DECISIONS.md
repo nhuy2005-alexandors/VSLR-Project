@@ -53,3 +53,24 @@ Quyết định kiến trúc + LÝ DO. Tích lũy, không xóa.
 - **Decision**: thêm `time_warp_sequence(sequence, rng, max_warp=0.30)` dùng phép biến đổi trục thời gian `t → t + w·sin(πt)`, gọi trong `augment_sequence` sau bước crop. **Không** thêm time stretch toàn cục.
 - **Reasoning**: time stretch toàn cục là **no-op** ở pipeline này. `extract_video` trim về vùng thấy tay rồi resample về đúng `SEQUENCE_LENGTH` 60 frame, nên thời lượng tuyệt đối đã bị chuẩn hóa mất — múa 2 giây và múa 5 giây ra cùng một chuỗi 60 frame. Thứ **thật sự** khác nhau giữa người ký là *nhịp bên trong* cử chỉ: ai dừng lâu ở đâu. Đó là cái `t → t + w·sin(πt)` bẻ: hai đầu bị ghim (t=0 → 0, t=1 → 1) nên không đổi vị trí bắt đầu/kết thúc, và ánh xạ còn đơn điệu khi `|w| < 1/π ≈ 0,318` nên không bao giờ chạy ngược thời gian. `max_warp = 0.30` giữ đạo hàm nhỏ nhất ở `1 − 0,30π ≈ 0,058 > 0`. Đo 500 seed: đơn điệu 100%, điểm giữa của một ramp thời gian chạy từ 0,211 đến 0,807 (gốc 0,508).
 - **Trade-offs**: không bump `FEATURES_VERSION` vì cache chỉ giữ landmark gốc, không giữ bản augment — nhưng **phân phối augment đã đổi**, nên bất kỳ con số đo trước thay đổi này đều không so sánh trực tiếp được với con số sau. Hiện chưa có con số nào nên không mất gì.
+
+## ADR-007: Manifest nhãn là cổng bắt buộc của `--data-dir`
+
+- **Date**: 2026-08-22
+- **Context**: suy nhãn từ cây chỉ phát hiện được nhãn đang tồn tại. Nếu cả 5 người đều quên cùng một nhãn, cây 26 lớp vẫn tự nhất quán và LOSO chạy xanh dưới tên bài toán 27 lớp.
+- **Decision**: `dataset/labels.txt` là nguồn sự thật; `vslr-train --data-dir` đọc `--labels-file`, chuẩn hóa NFC và từ chối cả nhãn thiếu toàn cục lẫn thư mục ngoài manifest **trước MediaPipe**. Thứ tự dòng trong manifest là thứ tự class index. `--video` legacy giữ self-contained vì nó cố ý train một tập con một người.
+- **Trade-offs**: danh sách 27 nhãn đề xuất phải được chốt trước khi train cây mới. Đây là blocker có chủ ý: fail sớm tốt hơn sinh artifact sai số lớp.
+
+## ADR-008: Chữ ký đầy đủ mới được ghép LOSO với checkpoint ship
+
+- **Date**: 2026-08-22
+- **Context**: cùng `data_fingerprint`/epochs/seed nhưng khác augmentation, batch size hay learning rate vẫn là hai quy trình train khác nhau; gọi accuracy của một quy trình là số của quy trình kia là sai.
+- **Decision**: cả hai artifact ghi `training_signature`, SHA-256 trên data fingerprint, **thứ tự nhãn**, epochs, số augment, batch size, learning rate, seed, pooling và feature version. Ship tự đọc report cạnh nó và in `PAIR OK` hoặc `PAIR MISMATCH`.
+- **Trade-offs**: đổi một tham số buộc chạy lại LOSO nếu muốn gắn con số với checkpoint mới. `num_workers` không nằm trong hash vì sample được seed theo index và số worker không đổi dữ liệu/optimizer steps.
+
+## ADR-009: Checkpoint lệch feature version fail-closed
+
+- **Date**: 2026-08-22
+- **Context**: checkpoint v1 nhận tensor đúng shape từ extractor v2 nên PyTorch không báo, nhưng phân phối landmark khác và chính loader biết predictions không đáng tin. Warning vẫn cho phép demo tiếp tục như thể hợp lệ.
+- **Decision**: `load_checkpoint` raise mặc định khi `features_version` khác (thiếu khóa = v1). `vslr-camera --allow-incompatible-model` là opt-in tường minh chỉ cho demo legacy tạm thời; checkpoint mới v2 chạy không cần cờ.
+- **Trade-offs**: `vslr-camera --no-tts` trên clean checkout hiện bị chặn cho tới khi chủ dự án cho phép train lại artifact. Không tự ghi đè model đang track.

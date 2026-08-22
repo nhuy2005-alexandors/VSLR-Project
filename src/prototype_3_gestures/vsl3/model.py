@@ -79,9 +79,32 @@ def save_checkpoint(path: str | Path, model: GestureLSTM, labels: list[str], con
     )
 
 
-def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> tuple[GestureLSTM, list[str], dict]:
+def load_checkpoint(
+    path: str | Path,
+    device: torch.device | str = "cpu",
+    *,
+    allow_incompatible_features: bool = False,
+) -> tuple[GestureLSTM, list[str], dict]:
     checkpoint = torch.load(path, map_location=device)
     config = checkpoint["config"]
+
+    # A checkpoint with no "features_version" key was written before the key existed, which means
+    # version 1. Feeding it v2 landmarks changes the model input distribution without changing a
+    # tensor shape, so load_state_dict cannot catch the incompatibility.
+    stored_features_version = int(config.get("features_version", 1))
+    if stored_features_version != FEATURES_VERSION:
+        message = (
+            f"{path} was trained on landmarks at FEATURES_VERSION={stored_features_version}"
+            f"{' (no key: assumed 1)' if 'features_version' not in config else ''}, but this install "
+            f"extracts version {FEATURES_VERSION}. Predictions are unreliable until you retrain."
+        )
+        if not allow_incompatible_features:
+            raise ValueError(
+                message
+                + " Refusing inference by default; retrain the checkpoint or explicitly opt in to "
+                "incompatible features for a temporary legacy demo."
+            )
+        warnings.warn(message, stacklevel=2)
 
     pooling = config.get("pooling")
     if pooling is None:
@@ -92,18 +115,6 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> tup
         warnings.warn(
             f"{path} has no 'pooling' key, loading it as {POOLING_LEGACY_LAST_STEP!r}. Correct for a "
             "checkpoint trained before the bidirectional pooling fix; retrain to get an explicit key.",
-            stacklevel=2,
-        )
-
-    # A checkpoint with no "features_version" key was written before the key existed, which means
-    # version 1 — treating the absence as "nothing to check" would skip the comparison for exactly
-    # the artifacts most likely to be stale.
-    stored_features_version = int(config.get("features_version", 1))
-    if stored_features_version != FEATURES_VERSION:
-        warnings.warn(
-            f"{path} was trained on landmarks at FEATURES_VERSION={stored_features_version}"
-            f"{' (no key: assumed 1)' if 'features_version' not in config else ''}, but this install "
-            f"extracts version {FEATURES_VERSION}. Predictions are unreliable until you retrain.",
             stacklevel=2,
         )
 

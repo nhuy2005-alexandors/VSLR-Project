@@ -15,8 +15,6 @@ _Xong: 2026-08-22. Spec: `docs/specs/record-to-test.md` lỗ hổng 1 (spec đó
 ## Dùng thế nào
 
 ```powershell
-$env:PYTHONIOENCODING = "utf-8"
-
 # cay nhieu nguoi: DIR/<nguoi>/<nhan>/*.mov
 vslr-check --data-dir dataset/raw
 
@@ -36,6 +34,7 @@ vslr-check --data-dir dataset/raw --clips-per-label 4 --min-hand-ratio 0.5
 | `QUA NGAN` | dưới 8 frame đọc được | Quay lại, dài hơn |
 | `KHONG THAY TAY` | MediaPipe thấy tay dưới 10% frame | Quay lại, tay rõ trong khung |
 | `QUAY LAI` | `hand_frame_ratio < --min-hand-ratio` | Quay lại |
+| `LOI HE THONG` | quyền file/cache/lỗi phần mềm không thuộc ba lỗi quay ở trên | **Không quay lại**; sửa lỗi được in kèm |
 | `ok` | đạt | — |
 
 Bản spec gốc gộp ba cái đầu thành một `FAIL`; `spec-critic` chỉ ra chúng cần ba hành động khác nhau.
@@ -77,3 +76,4 @@ Hai đường exit đều kiểm:
 - Nhãn được so bằng NFC. Tên NFD (kiểu macOS/iOS) in ra **giống hệt** NFC nhưng là chuỗi khác; `normalise_label` chuẩn hóa cả hai phía nên không báo "thiếu" một nhãn trông y như nhãn đang có. Có test.
 - `--clips-per-label` mặc định 4 theo `dataset-recording.md`. Kiểm giữa buổi thì đặt bằng số vòng đã quay, không thì mọi cặp đều báo thiếu.
 - Lệnh này **không** ghi vào `models/`. Nó chỉ đọc, và ghi cache landmark.
+- CLI tự cấu hình UTF-8, nên help và nhãn tiếng Việt in được trên console Windows không cần biến môi trường.

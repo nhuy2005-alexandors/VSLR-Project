@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
+from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import (
     FEATURE_DIM,
     FEATURES_VERSION,
@@ -22,11 +23,25 @@ from .vsl3.features import (
     HolisticExtractor,
     augment_sequence,
 )
+from .vsl3.labels import DEFAULT_LABELS_FILE, normalise_label, read_expected_labels
 from .vsl3.model import POOLING_FWD_LAST_BWD_FIRST, GestureLSTM, save_checkpoint
 
 SINGLE_SIGNER = "unknown"
 VIDEO_SUFFIXES = {".mov", ".mp4"}
 MAX_FAILED_CLIP_RATIO = 0.05
+TRAINING_SIGNATURE_FIELDS = (
+    "data_fingerprint",
+    "labels",
+    "epochs",
+    "augmentations_per_clip",
+    "batch_size",
+    "learning_rate",
+    "seed",
+    "pooling",
+    "features_version",
+)
+
+configure_utf8_stdio()
 
 
 @dataclass(frozen=True)
@@ -51,7 +66,13 @@ def discover_clips(data_dir: str | Path) -> list[Clip]:
         for label_dir in sorted(p for p in person_dir.iterdir() if p.is_dir()):
             for path in sorted(label_dir.iterdir()):
                 if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES:
-                    clips.append(Clip(label=label_dir.name, person=person_dir.name, path=path.resolve()))
+                    clips.append(
+                        Clip(
+                            label=normalise_label(label_dir.name),
+                            person=person_dir.name,
+                            path=path.resolve(),
+                        )
+                    )
 
     if not clips:
         raise ValueError(
@@ -71,7 +92,7 @@ def parse_video_specs(values: list[str]) -> list[Clip]:
         if "=" not in value:
             raise ValueError(f"Invalid --video '{value}'. Expected LABEL=PATH")
         label, raw_path = value.split("=", 1)
-        label = label.strip()
+        label = normalise_label(label)
         path = Path(raw_path.strip()).expanduser().resolve()
         if not label:
             raise ValueError("Gesture label cannot be empty")
@@ -117,6 +138,31 @@ def validate_clips(clips: list[Clip], *, require_signer_split: bool) -> None:
         raise ValueError(
             "Every gesture must be recorded by every person for leave-one-signer-out. "
             f"Missing {len(missing)} pair(s): {sorted(missing)}"
+        )
+
+
+def validate_expected_labels(clips: list[Clip], expected_labels: list[str]) -> None:
+    """Require the data tree to match the authoritative manifest exactly.
+
+    Looking only at the tree cannot detect a gesture that nobody recorded: an absent directory
+    leaves no evidence. This gate runs before MediaPipe so a 26-class tree cannot silently train
+    under a 27-class project configuration.
+    """
+    expected = [normalise_label(label) for label in expected_labels]
+    actual = label_order(clips)
+    actual_set = set(actual)
+    expected_set = set(expected)
+    missing = [label for label in expected if label not in actual_set]
+    unexpected = [label for label in actual if label not in expected_set]
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append(f"labels with no clips anywhere: {missing}")
+        if unexpected:
+            details.append(f"unexpected gesture directories: {unexpected}")
+        raise ValueError(
+            "Dataset labels do not match the authoritative labels file (" + "; ".join(details) + "). "
+            "Directory names must match the Vietnamese labels exactly."
         )
 
 
@@ -173,9 +219,19 @@ def data_fingerprint(clips: list[Clip]) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
+def training_signature(metadata: dict) -> str:
+    """Hash every input that makes LOSO and ship training procedures comparable."""
+    missing = [field for field in TRAINING_SIGNATURE_FIELDS if field not in metadata]
+    if missing:
+        raise ValueError(f"Cannot build training signature; missing fields: {missing}")
+    payload = {field: metadata[field] for field in TRAINING_SIGNATURE_FIELDS}
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def run_metadata(args, clips: list[Clip], labels: list[str], people: list[str], device) -> dict:
     """Everything needed to reproduce a run, written into both report kinds."""
-    return {
+    metadata = {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "labels": labels,
         "people": people,
@@ -192,6 +248,8 @@ def run_metadata(args, clips: list[Clip], labels: list[str], people: list[str], 
         "features_version": FEATURES_VERSION,
         "device": str(device),
     }
+    metadata["training_signature"] = training_signature(metadata)
+    return metadata
 
 
 def _write_cache_entry(cached: Path, sequence: np.ndarray, stats: dict) -> None:
@@ -221,29 +279,65 @@ def _write_cache_entry(cached: Path, sequence: np.ndarray, stats: dict) -> None:
             pass
 
 
+def _cache_scalar(data, name: str):
+    value = np.asarray(data[name])
+    if value.size != 1:
+        raise ValueError(f"cache field {name!r} must be scalar, got shape {value.shape}")
+    return value.item()
+
+
+def _read_cache_entry(cached: Path) -> tuple[np.ndarray, dict]:
+    """Read and validate a cache entry before it can bypass MediaPipe."""
+    with np.load(cached, allow_pickle=False) as data:
+        sequence = np.asarray(data["sequence"], dtype=np.float32)
+        if sequence.shape != (SEQUENCE_LENGTH, FEATURE_DIM):
+            raise ValueError(
+                f"cached sequence has shape {sequence.shape}, expected {(SEQUENCE_LENGTH, FEATURE_DIM)}"
+            )
+        if not np.isfinite(sequence).all():
+            raise ValueError("cached sequence contains NaN or infinity")
+
+        sampled_raw = float(_cache_scalar(data, "sampled_frames"))
+        trimmed_raw = float(_cache_scalar(data, "trimmed_frames"))
+        hand_ratio = float(_cache_scalar(data, "hand_frame_ratio"))
+        if not sampled_raw.is_integer() or not trimmed_raw.is_integer():
+            raise ValueError("cached frame counts must be integers")
+        sampled_frames = int(sampled_raw)
+        trimmed_frames = int(trimmed_raw)
+        if sampled_frames < 8 or not 8 <= trimmed_frames <= sampled_frames:
+            raise ValueError(
+                f"invalid cached frame counts sampled={sampled_frames}, trimmed={trimmed_frames}"
+            )
+        if not np.isfinite(hand_ratio) or not 0.10 <= hand_ratio <= 1.0:
+            raise ValueError(f"invalid cached hand_frame_ratio={hand_ratio}")
+
+    return sequence, {
+        "sampled_frames": sampled_frames,
+        "trimmed_frames": trimmed_frames,
+        "hand_frame_ratio": hand_ratio,
+    }
+
+
 def extract_with_cache(clip: Clip, extractor, cache_dir: Path) -> tuple[np.ndarray, dict]:
     key = cache_key(clip.path, clip.path.stat().st_mtime)
     cached = cache_dir / f"{key}.npz"
 
     if cached.exists():
         try:
-            with np.load(cached, allow_pickle=False) as data:
-                sequence = data["sequence"].astype(np.float32)
-                stats = {
-                    "video": str(clip.path),
-                    "label": clip.label,
-                    "person": clip.person,
-                    "sampled_frames": int(data["sampled_frames"]),
-                    "trimmed_frames": int(data["trimmed_frames"]),
-                    "hand_frame_ratio": float(data["hand_frame_ratio"]),
-                    "from_cache": True,
-                }
+            sequence, cached_stats = _read_cache_entry(cached)
+            stats = {
+                "video": str(clip.path),
+                "label": clip.label,
+                "person": clip.person,
+                **cached_stats,
+                "from_cache": True,
+            }
             return sequence, stats
-        except Exception as exc:  # truncated / corrupt / unreadable entry
+        except Exception as exc:  # truncated / corrupt / structurally invalid entry
             # Must not be reported as a bad recording, and must not poison this clip forever:
             # drop the entry and fall through to a real extraction.
             warnings.warn(
-                f"Discarding unreadable cache entry for {clip.path.name} ({exc}); re-extracting.",
+                f"Discarding invalid cache entry for {clip.path.name} ({exc}); re-extracting.",
                 stacklevel=2,
             )
             try:
@@ -300,11 +394,28 @@ class GestureDataset(Dataset):
         return torch.from_numpy(np.ascontiguousarray(features)), self.targets[clip_idx]
 
 
-def accuracy(model: nn.Module, loader: DataLoader, device: torch.device) -> tuple[float, float]:
+def build_eval_loader(sequences: list[np.ndarray], targets: list[int], args) -> DataLoader:
+    """Unaugmented and unshuffled, so row i of `evaluate` is clip i.
+
+    That alignment is the whole basis for naming which clip a wrong prediction came from. Shuffling
+    or augmenting here would keep every accuracy number correct while silently attaching each
+    prediction to the wrong filename.
+    """
+    dataset = GestureDataset(sequences, targets, 0, args.seed)
+    return DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+
+
+def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> tuple[float, float, list[dict]]:
+    """Returns (mean loss, accuracy, one row per sample in loader order).
+
+    `confidence` is softmax-max so it is the same quantity `--confidence` compares against in
+    realtime (`predict_sequence`); a raw-logit "confidence" would not be comparable.
+    """
     criterion = nn.CrossEntropyLoss()
     total_loss = 0.0
     correct = 0
     total = 0
+    rows: list[dict] = []
     model.eval()
     with torch.no_grad():
         for features, targets in loader:
@@ -312,9 +423,67 @@ def accuracy(model: nn.Module, loader: DataLoader, device: torch.device) -> tupl
             targets = targets.to(device)
             logits = model(features)
             total_loss += float(criterion(logits, targets)) * len(targets)
-            correct += int((logits.argmax(dim=1) == targets).sum())
+            confidences, predicted = torch.softmax(logits, dim=1).max(dim=1)
+            correct += int((predicted == targets).sum())
             total += len(targets)
-    return total_loss / max(total, 1), correct / max(total, 1)
+            for target, prediction, confidence in zip(
+                targets.tolist(), predicted.tolist(), confidences.tolist(), strict=True
+            ):
+                rows.append({"target": target, "predicted": prediction, "confidence": confidence})
+    return total_loss / max(total, 1), correct / max(total, 1), rows
+
+
+def worst_labels(predictions: list[dict], limit: int = 5) -> list[dict]:
+    """Lowest-accuracy labels, each with the label it is most often mistaken for.
+
+    A single overall number cannot separate "wrong everywhere" from "two labels dead, 25 perfect",
+    and those need completely different actions.
+    """
+    totals: dict[str, list[int]] = {}
+    confusions: dict[str, dict[str, int]] = {}
+    for row in predictions:
+        label = row["label"]
+        seen, right = totals.setdefault(label, [0, 0])
+        totals[label] = [seen + 1, right + int(row["correct"])]
+        if not row["correct"]:
+            confusions.setdefault(label, {})
+            confusions[label][row["predicted"]] = confusions[label].get(row["predicted"], 0) + 1
+
+    ranked = []
+    for label, (seen, right) in totals.items():
+        if right == seen:
+            continue
+        wrong_as = confusions.get(label, {})
+        ranked.append(
+            {
+                "label": label,
+                "clips": seen,
+                "correct": right,
+                "accuracy": right / seen,
+                "confused_with": max(wrong_as, key=wrong_as.get) if wrong_as else None,
+            }
+        )
+    ranked.sort(key=lambda row: (row["accuracy"], row["label"]))
+    return ranked[:limit]
+
+
+def suspect_clips(predictions: list[dict], extraction: list[dict], min_hand_ratio: float = 0.5) -> list[dict]:
+    """Clips that are BOTH predicted wrong and poorly recorded — the re-record candidates.
+
+    Deliberately an absolute threshold, not "below the median": half of any set is below its own
+    median, so a median rule can never return an empty list however good the recording is.
+    """
+    ratios = {row["video"]: row["hand_frame_ratio"] for row in extraction}
+    missing = sorted({row["video"] for row in predictions if row["video"] not in ratios})
+    if missing:
+        raise ValueError(f"Prediction/extraction join is incomplete; missing video stats for: {missing}")
+    suspects = [
+        {**row, "hand_frame_ratio": ratios[row["video"]]}
+        for row in predictions
+        if not row["correct"] and ratios[row["video"]] < min_hand_ratio
+    ]
+    suspects.sort(key=lambda row: row["hand_frame_ratio"])
+    return suspects
 
 
 def train_model(
@@ -345,8 +514,7 @@ def train_model(
     if val_sequences:
         # Never augmented: the reported number is per real clip. Small enough that workers cost more
         # than they save.
-        val_dataset = GestureDataset(val_sequences, val_targets or [], 0, args.seed)
-        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+        val_loader = build_eval_loader(val_sequences, val_targets or [], args)
 
     model = GestureLSTM(FEATURE_DIM, num_classes).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
@@ -379,7 +547,7 @@ def train_model(
             "train_accuracy": correct / total,
         }
         if val_loader is not None:
-            val_loss, val_acc = accuracy(model, val_loader, device)
+            val_loss, val_acc, _ = evaluate(model, val_loader, device)
             row["val_loss_plain_ce"] = val_loss
             row["val_accuracy"] = val_acc
         history.append(row)
@@ -443,12 +611,27 @@ def non_negative_int(value: str) -> int:
     return number
 
 
+def unit_interval(value: str) -> float:
+    number = float(value)
+    if not np.isfinite(number) or not 0.0 < number <= 1.0:
+        raise argparse.ArgumentTypeError(f"must be in (0, 1], got {value}")
+    return number
+
+
+def positive_float(value: str) -> float:
+    number = float(value)
+    if not np.isfinite(number) or number <= 0.0:
+        raise argparse.ArgumentTypeError(f"must be a finite number > 0, got {value}")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train the MediaPipe + BiLSTM gesture recogniser")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
         "--data-dir",
-        help="Root of DIR/<person>/<gesture>/*.mov. Gesture directory names are used verbatim as labels.",
+        help="Root of DIR/<person>/<gesture>/*.mov. Gesture directories must match --labels-file; "
+        "names are NFC-normalised and used as the model/TTS labels.",
     )
     source.add_argument(
         "--video",
@@ -459,6 +642,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--loso",
         action="store_true",
         help="Measure only: leave-one-signer-out over every person. Writes loso_report.json, no checkpoint.",
+    )
+    parser.add_argument(
+        "--labels-file",
+        default=DEFAULT_LABELS_FILE,
+        help="Authoritative label manifest for --data-dir. Every listed label must exist in the tree, "
+        "and unexpected gesture directories are refused before extraction.",
     )
     parser.add_argument("--model-dir", default="models", help="Directory for model and training metadata")
     parser.add_argument(
@@ -477,8 +666,14 @@ def build_parser() -> argparse.ArgumentParser:
         "select on the test signer.",
     )
     parser.add_argument("--batch-size", type=positive_int, default=32)
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--learning-rate", type=positive_float, default=1e-3)
     parser.add_argument("--seed", type=non_negative_int, default=42)
+    parser.add_argument(
+        "--min-hand-ratio",
+        type=unit_interval,
+        default=0.5,
+        help="In --loso reporting, mark a wrong clip as a re-record candidate below this hand ratio.",
+    )
     parser.add_argument(
         "--num-workers",
         type=non_negative_int,
@@ -497,15 +692,16 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     try:
-        clips = discover_clips(args.data_dir) if args.data_dir else parse_video_specs(args.video)
+        if args.data_dir:
+            clips = discover_clips(args.data_dir)
+            expected_labels = read_expected_labels(args.labels_file)
+            validate_expected_labels(clips, expected_labels)
+        else:
+            clips = parse_video_specs(args.video)
+            expected_labels = label_order(clips)
         validate_clips(clips, require_signer_split=args.loso)
-    except (ValueError, FileNotFoundError, NotADirectoryError) as exc:
+    except (ValueError, OSError) as exc:
         raise SystemExit(f"error: {exc}") from exc
-
-    # Snapshot before extraction can drop anything. A label whose every clip fails would otherwise
-    # disappear from the class set entirely and go unnoticed by the post-drop re-validation, which
-    # only sees survivors — turning a 27-class problem into an easier 26-class one under the same name.
-    expected_labels = label_order(clips)
 
     model_dir = Path(args.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -540,7 +736,9 @@ def main() -> None:
                 "name. Fix or re-record those clips."
             )
 
-    labels = label_order(clips)
+    # The manifest order is the class-index order for directory mode. Single-signer --video mode
+    # intentionally remains self-contained for the legacy three-label demo.
+    labels = expected_labels if args.data_dir else label_order(clips)
     label_to_idx = {label: idx for idx, label in enumerate(labels)}
     targets = [label_to_idx[clip.label] for clip in clips]
     people = sorted({clip.person for clip in clips})
@@ -552,7 +750,7 @@ def main() -> None:
         for val_person in people:
             train_idx, val_idx = signer_split(clips, val_person)
             print(f"\nFold '{val_person}': train {len(train_idx)} clips / test {len(val_idx)} clips")
-            _, history = train_model(
+            fold_model, history = train_model(
                 [sequences[i] for i in train_idx],
                 [targets[i] for i in train_idx],
                 len(labels),
@@ -563,6 +761,24 @@ def main() -> None:
                 log_prefix=f"  [{val_person}] ",
             )
             final = history[-1]
+            # A second pass over the same unshuffled, unaugmented loader: cheap, and it is the only
+            # way to attach a prediction to the clip it came from without threading paths through
+            # train_model or bloating history with 108 rows per epoch.
+            fold_loader = build_eval_loader(
+                [sequences[i] for i in val_idx], [targets[i] for i in val_idx], args
+            )
+            _, _, rows = evaluate(fold_model, fold_loader, device)
+            predictions = [
+                {
+                    "video": str(clips[clip_index].path),
+                    "person": clips[clip_index].person,
+                    "label": labels[row["target"]],
+                    "predicted": labels[row["predicted"]],
+                    "confidence": row["confidence"],
+                    "correct": row["target"] == row["predicted"],
+                }
+                for clip_index, row in zip(val_idx, rows, strict=True)
+            ]
             folds.append(
                 {
                     "held_out_person": val_person,
@@ -570,6 +786,7 @@ def main() -> None:
                     "test_clips": len(val_idx),
                     "test_accuracy": final["val_accuracy"],
                     "test_loss": final["val_loss_plain_ce"],
+                    "predictions": predictions,
                     "history": history,
                 }
             )
@@ -597,7 +814,11 @@ def main() -> None:
                 "different clip counts). Epochs were fixed in advance, NOT selected on these folds — "
                 "selecting there would tune a hyperparameter on the test signer. Report the mean "
                 "together with the worst fold, and state the signer count. train_loss_smoothed uses "
-                "label_smoothing=0.03 while val_loss_plain_ce does not; do not read them as one curve."
+                "label_smoothing=0.03 while val_loss_plain_ce does not; do not read them as one curve. "
+                "folds[].predictions holds one row per test clip; per-label accuracy, the worst labels "
+                "and the re-record candidates are pure functions of it plus extraction[], so they are "
+                "printed to the console rather than stored — a stored copy could drift from its source. "
+                "Pair this report with a ship checkpoint only when training_signature matches exactly."
             ),
         }
         report_path = model_dir / "loso_report.json"
@@ -607,7 +828,31 @@ def main() -> None:
             f"pooled {report['pooled_accuracy']:.1%} ({total_correct}/{total_tested} clips), "
             f"worst fold '{worst['held_out_person']}' {worst['test_accuracy']:.1%}"
         )
-        print(f"Wrote {report_path}. No checkpoint written — this mode measures only.")
+        print(f"training_signature {report['training_signature'][:12]}")
+        all_predictions = [row for fold in folds for row in fold["predictions"]]
+        ranked = worst_labels(all_predictions, limit=5)
+        if ranked:
+            print(f"\n{len(ranked)} worst label(s) of {len(labels)}:")
+            for row in ranked:
+                confusion = f", most often read as '{row['confused_with']}'" if row["confused_with"] else ""
+                print(f"  {row['label']:24.24s} {row['correct']}/{row['clips']} = {row['accuracy']:.0%}{confusion}")
+        else:
+            print(f"\nEvery one of the {len(labels)} labels was predicted correctly on every test clip.")
+
+        suspects = suspect_clips(all_predictions, extraction_stats, args.min_hand_ratio)
+        print(
+            f"\n{len(suspects)} clip(s) both predicted wrong AND recorded below "
+            f"hand_frame_ratio {args.min_hand_ratio:.2f} — re-record candidates:"
+        )
+        for row in suspects[:10]:
+            print(
+                f"  {row['hand_frame_ratio']:.0%} hands | {row['person']}/{row['label']} "
+                f"-> '{row['predicted']}' ({row['confidence']:.0%}) | {Path(row['video']).name}"
+            )
+        if len(suspects) > 10:
+            print(f"  ... and {len(suspects) - 10} more (see folds[].predictions)")
+
+        print(f"\nWrote {report_path}. No checkpoint written — this mode measures only.")
         return
 
     print(f"\nTraining on all {len(clips)} clips for {args.epochs} epochs (no validation, no early stopping)...")
@@ -635,8 +880,9 @@ def main() -> None:
             "This checkpoint is trained on EVERY clip listed in extraction[]: it has no holdout and "
             "carries no accuracy number. Any accuracy you report must come from "
             "`vslr-train --data-dir ... --loso` (models/loso_report.json), and that report is only "
-            "about this checkpoint if its data_fingerprint, epochs, seed and features_version match "
-            "the ones here. Cross-check the test clips against extraction[].video either way."
+            "about this checkpoint only when training_signature matches exactly. That signature covers "
+            "the data fingerprint, epochs, augmentation count, batch size, learning rate, seed, pooling "
+            "and feature version. Cross-check the test clips against extraction[].video either way."
         ),
         "history": history,
     }
@@ -644,7 +890,21 @@ def main() -> None:
     (model_dir / "labels.json").write_text(json.dumps(labels, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"Saved {model_dir / 'gesture_lstm.pt'} ({len(labels)} labels, {args.epochs} epochs, all clips)")
-    print(f"data_fingerprint {metrics['data_fingerprint'][:12]} — must match loso_report.json to pair them.")
+    print(
+        f"training_signature {metrics['training_signature'][:12]} — must match "
+        "loso_report.json to pair its accuracy with this checkpoint."
+    )
+    report_path = model_dir / "loso_report.json"
+    if report_path.exists():
+        try:
+            loso_signature = json.loads(report_path.read_text(encoding="utf-8")).get("training_signature")
+        except (OSError, ValueError) as exc:
+            print(f"WARNING: could not verify {report_path}: {exc}")
+        else:
+            if loso_signature == metrics["training_signature"]:
+                print(f"PAIR OK: {report_path} has the same training signature.")
+            else:
+                print(f"PAIR MISMATCH: {report_path} does NOT describe this training configuration.")
     print("This checkpoint has NO accuracy number. Run --loso to get one.")
     print("Next: vslr-camera --no-tts")
 
