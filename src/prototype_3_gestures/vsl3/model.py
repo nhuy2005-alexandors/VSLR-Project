@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
+
+from .features import FEATURES_VERSION
+
+
+POOLING_FWD_LAST_BWD_FIRST = "fwd_last_bwd_first"
+POOLING_LEGACY_LAST_STEP = "legacy_last_step"
+POOLING_MODES = (POOLING_FWD_LAST_BWD_FIRST, POOLING_LEGACY_LAST_STEP)
 
 
 class GestureLSTM(nn.Module):
@@ -15,8 +23,13 @@ class GestureLSTM(nn.Module):
         hidden_size: int = 96,
         num_layers: int = 1,
         bidirectional: bool = True,
+        pooling: str = POOLING_FWD_LAST_BWD_FIRST,
     ):
         super().__init__()
+        if pooling not in POOLING_MODES:
+            raise ValueError(f"Unknown pooling {pooling!r}; expected one of {POOLING_MODES}")
+        self.pooling = pooling
+        self.bidirectional = bidirectional
         self.input_norm = nn.LayerNorm(input_dim)
         self.lstm = nn.LSTM(
             input_size=input_dim,
@@ -35,10 +48,22 @@ class GestureLSTM(nn.Module):
             nn.Linear(64, num_classes),
         )
 
+    def pool_sequence(self, out: torch.Tensor) -> torch.Tensor:
+        """Collapse [batch, time, 2*hidden] to [batch, 2*hidden].
+
+        On a bidirectional LSTM the reverse direction runs from the last frame backwards, so
+        `out[:, -1, hidden:]` has only consumed a single frame — taking both halves at t=-1
+        wastes half the representation. Forward's summary is at t=-1, backward's at t=0.
+        """
+        if not self.bidirectional or self.pooling == POOLING_LEGACY_LAST_STEP:
+            return out[:, -1, :]
+        hidden = self.lstm.hidden_size
+        return torch.cat([out[:, -1, :hidden], out[:, 0, hidden:]], dim=1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.input_norm(x)
         out, _ = self.lstm(x)
-        return self.head(out[:, -1, :])
+        return self.head(self.pool_sequence(out))
 
 
 def save_checkpoint(path: str | Path, model: GestureLSTM, labels: list[str], config: dict) -> None:
@@ -57,12 +82,34 @@ def save_checkpoint(path: str | Path, model: GestureLSTM, labels: list[str], con
 def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> tuple[GestureLSTM, list[str], dict]:
     checkpoint = torch.load(path, map_location=device)
     config = checkpoint["config"]
+
+    pooling = config.get("pooling")
+    if pooling is None:
+        # ponytail: checkpoints written before the pooling fix carry no key. Legacy is the correct
+        # default for them, but pooling changes predictions without changing any tensor shape, so
+        # load_state_dict cannot detect a wrong guess — say so out loud rather than assume silently.
+        pooling = POOLING_LEGACY_LAST_STEP
+        warnings.warn(
+            f"{path} has no 'pooling' key, loading it as {POOLING_LEGACY_LAST_STEP!r}. Correct for a "
+            "checkpoint trained before the bidirectional pooling fix; retrain to get an explicit key.",
+            stacklevel=2,
+        )
+
+    stored_features_version = config.get("features_version")
+    if stored_features_version is not None and int(stored_features_version) != FEATURES_VERSION:
+        warnings.warn(
+            f"{path} was trained on landmarks at FEATURES_VERSION={stored_features_version}, but this "
+            f"install extracts version {FEATURES_VERSION}. Predictions are unreliable until you retrain.",
+            stacklevel=2,
+        )
+
     model = GestureLSTM(
         input_dim=int(config["input_dim"]),
         num_classes=len(checkpoint["labels"]),
         hidden_size=int(config.get("hidden_size", 96)),
         num_layers=int(config.get("num_layers", 1)),
         bidirectional=bool(config.get("bidirectional", True)),
+        pooling=str(pooling),
     )
     model.load_state_dict(checkpoint["model_state"])
     model.to(device)

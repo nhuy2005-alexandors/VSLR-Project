@@ -7,10 +7,10 @@ Prototype nhận ba cử chỉ tiếng Việt `Cảm ơn`, `Chuyện gì`, `Xin 
 ```text
 src/prototype_3_gestures/  Source train và realtime
 tests/                     Unit tests
-dataset/raw/               9 clip train đã chọn (1, 4, 7 mỗi nhãn)
-dataset/processed/         Landmark dataset đã augmentation
-dataset/legacy/            Bộ video VSLR lớn được giữ để dùng sau
-models/                    Checkpoint và metadata vừa train
+dataset/raw/               27 clip train (1–9 mỗi nhãn), tên file không mã hóa người ký
+dataset/processed/         Cache landmark per-clip, tự sinh lại được
+dataset/legacy/            Bộ từ điển VSL crawl từ bên thứ ba (4362 video / 3315 nhãn)
+models/                    Checkpoint và metadata
 ```
 
 ## Cài đặt
@@ -37,24 +37,54 @@ Mỗi lần múa xong một cử chỉ, hạ tay khoảng 0,45 giây. Sau cử c
 
 ## Kết quả hiện tại
 
-- Train bằng 3 clip/cử chỉ: clip 1, 4, 7.
-- Source-holdout trong quá trình chọn epoch: 100%.
-- Kiểm tra độc lập trên clip 2, 5, 9: 8/9 (88,9%).
-- `Chuyện gì 5.mov` vẫn bị nhầm thành `Cảm ơn`; đây là giới hạn đã biết của dataset nhỏ.
+**Chưa có con số accuracy nào báo cáo được.**
 
-## Train lại
+- 27 clip nguồn, 9 clip mỗi cử chỉ. Tên file **không** mã hóa người ký, và không ai xác nhận được clip nào của người nào — nên không chạy được leave-one-signer-out trên bộ này.
+- Checkpoint trong `models/` được train bằng **pipeline cũ** (chọn epoch theo source-holdout rồi refit; cả hai đã bị xóa). Nó train đúng 1 epoch và dùng pooling BiLSTM cũ. Chạy được cho demo camera, **không** dùng để báo bất kỳ số nào. Chi tiết: `docs/GOTCHAS.md`.
+- Muốn có con số: quay dataset có ID người theo `docs/specs/dataset-recording.md`, rồi chạy `--loso`.
 
-Lệnh train nhận đúng ba nhãn, mỗi nhãn ít nhất hai video. Ví dụ:
+## Train
+
+Hai chế độ, một lệnh. Chi tiết trong `docs/technical_specs/pipeline-restructure.md`.
 
 ```powershell
-vslr-train `
-  --video "Cảm ơn=dataset/raw/cam_on/Cảm ơn 1.mov" `
-  --video "Cảm ơn=dataset/raw/cam_on/Cảm ơn 4.mov" `
-  --video "Cảm ơn=dataset/raw/cam_on/Cảm ơn 7.mov" `
-  --video "Chuyện gì=dataset/raw/chuyen_gi/Chuyện gì 1.mov" `
-  --video "Chuyện gì=dataset/raw/chuyen_gi/Chuyện gì 4.mov" `
-  --video "Chuyện gì=dataset/raw/chuyen_gi/Chuyện gì 7.mov" `
-  --video "Xin chào=dataset/raw/xin_chao/Xin chào 1.mov" `
-  --video "Xin chào=dataset/raw/xin_chao/Xin chào 4.mov" `
-  --video "Xin chào=dataset/raw/xin_chao/Xin chào 7.mov"
+$env:PYTHONIOENCODING = "utf-8"
+
+# ĐO: leave-one-signer-out, ghi models/loso_report.json, KHÔNG ghi checkpoint
+vslr-train --data-dir dataset/raw --loso --num-workers 4
+
+# SẢN XUẤT: train mọi clip, ship weight cuối, KHÔNG kèm accuracy
+vslr-train --data-dir dataset/raw --num-workers 4
 ```
+
+`--data-dir` cần cây `DIR/<người>/<cử chỉ>/*.mov`, tên thư mục cử chỉ là tiếng Việt có dấu vì nó đi thẳng vào `labels.json` và vào câu TTS đọc ra:
+
+```text
+dataset/raw/P1/Cảm ơn/Cảm ơn 01.mov
+```
+
+`dataset/raw/` hiện **phẳng** (`dataset/raw/<cử chỉ>/*.mov`, không có cấp người) nên `--data-dir dataset/raw` báo lỗi ở cả hai chế độ — đúng thiết kế, nó không đoán ID người:
+
+```
+error: No .mov/.mp4 clips under dataset\raw. Expected layout DIR/<person>/<gesture>/*.mov
+```
+
+Train bộ 27 clip hiện tại phải dùng chế độ một-người:
+
+```powershell
+$trainArgs = @()
+$sets = @(
+  @("Cảm ơn", "dataset/raw/cam_on"),
+  @("Chuyện gì", "dataset/raw/chuyen_gi"),
+  @("Xin chào", "dataset/raw/xin_chao")
+)
+foreach ($set in $sets) {
+  foreach ($i in 1..9) {
+    $trainArgs += "--video"
+    $trainArgs += "$($set[0])=$(Join-Path $set[1] "$($set[0]) $i.mov")"
+  }
+}
+vslr-train @trainArgs
+```
+
+Chế độ đó gán mọi clip là cùng một người và từ chối `--loso`, nên nó chỉ ra được artifact để demo.

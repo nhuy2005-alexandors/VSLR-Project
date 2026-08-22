@@ -14,6 +14,12 @@ N_LANDMARKS = N_POSE + N_HAND * 2
 FEATURE_DIM = N_LANDMARKS * 3
 SEQUENCE_LENGTH = 60
 
+# Bump by hand whenever the landmark maths changes: normalize_landmarks, the trim/margin
+# rule, the sampling stride, or HolisticExtractor's confidence defaults. The landmark cache
+# keys on this, so forgetting to bump it serves stale landmarks from a previous extractor
+# and every number downstream silently describes the old one.
+FEATURES_VERSION = 1
+
 
 @dataclass(frozen=True)
 class FrameObservation:
