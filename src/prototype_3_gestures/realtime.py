@@ -94,18 +94,20 @@ class SegmentTracker:
             if not self.in_segment:
                 self.segment = []
                 self.in_segment = True
-            self.segment.append(features)
-            if len(self.segment) >= self.max_frames:
-                self.awaiting_hand_drop = True
-                return self._close()
+            return self._append(features, forced_by_cap=True)
+
+        if self.awaiting_hand_drop:
+            # Same hysteresis the close path below uses. Clearing on the first no-hand frame
+            # treated a dropped detection — noise everywhere else in this machine — as the hands
+            # coming down, and the next frame opened a second word mid-gesture.
+            if now - self.last_hand_time >= self.word_gap:
+                self.awaiting_hand_drop = False
             return None
 
-        self.awaiting_hand_drop = False
         if not self.in_segment:
             return None
         if now - self.last_hand_time < self.word_gap:
-            self.segment.append(features)
-            return None
+            return self._append(features, forced_by_cap=False)
         return self._close()
 
     def force_boundary(self) -> list[np.ndarray] | None:
@@ -115,6 +117,15 @@ class SegmentTracker:
         self.segment = []
         self.in_segment = False
         self.awaiting_hand_drop = False
+
+    def _append(self, features: np.ndarray, forced_by_cap: bool) -> list[np.ndarray] | None:
+        """Single place that grows a segment, so max_frames is a cap on every path into it."""
+        self.segment.append(features)
+        if len(self.segment) >= self.max_frames:
+            # Only wait for a hand-drop if the hands were actually still up when the cap hit.
+            self.awaiting_hand_drop = forced_by_cap
+            return self._close()
+        return None
 
     def _close(self) -> list[np.ndarray]:
         done, self.segment, self.in_segment = self.segment, [], False
@@ -139,6 +150,18 @@ def main() -> None:
     )
     parser.add_argument("--no-tts", action="store_true")
     args = parser.parse_args()
+    if not 0.0 < args.confidence <= 1.0:
+        parser.error(f"--confidence must be in (0, 1], got {args.confidence}")
+    for name, value in (("--word-gap", args.word_gap), ("--sentence-gap", args.sentence_gap)):
+        if value <= 0.0:
+            parser.error(f"{name} must be > 0, got {value}")
+    if args.min_frames < 1:
+        parser.error(f"--min-frames must be >= 1, got {args.min_frames}")
+    if args.max_frames < args.min_frames:
+        parser.error(
+            f"--max-frames ({args.max_frames}) must be >= --min-frames ({args.min_frames}); "
+            "otherwise every segment is dropped and the demo silently recognises nothing."
+        )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, labels, config = load_checkpoint(Path(args.model), device)

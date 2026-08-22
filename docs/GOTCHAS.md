@@ -32,6 +32,27 @@ Bẫy đã gặp. Tích lũy, không xóa. Gặp bẫy mới → append.
 - **Kiểm tra "27/27 sequence gốc" không phủ được lỗi này**: đó là 27 mẫu nằm trong train set, và là mẫu dễ nhất (chưa augment).
 - **Avoidance/fix**: đừng buộc số epoch refit vào `best_epoch` khi val đã bão hòa. Chọn `best_epoch` theo (val_accuracy, rồi val_loss), hoặc đặt sàn cho số epoch refit, hoặc bỏ hẳn refit và ship `best_state`. Luôn đọc `final_fit_epochs` trong `metrics.json` trước khi tin một checkpoint.
 
+## Landmark của một clip phụ thuộc clip nào được extract trước nó
+
+- **Symptom**: không có symptom. Train chạy, test pass, số trông hợp lý. Nhưng chạy lại cùng một dataset có thể ra bộ landmark khác.
+- **Cause**: `HolisticExtractor` dùng **một** instance MediaPipe cho mọi clip, với `static_image_mode=False, smooth_landmarks=True`. MediaPipe mang state tracking + smoothing qua các lần `process_frame`, và `extract_video` cũ không tạo instance mới giữa hai video. Đo trực tiếp — cùng một clip, đổi thứ tự xử lý:
+  ```
+  Cảm ơn 1.mov      giong het: False | lech max 1.358964 | lech tb 0.054683
+  Xin chào 1.mov    giong het: False | lech max 1.375215 | lech tb 0.030724
+  clip di dau tien -> khop chinh xac ban extract rieng le; clip di sau -> lech
+  6 clip, lech max tung clip: [0.0, 1.71, 0.75, 1.20, 1.99, 1.13]
+  ```
+  Lệch **1,36–1,99** trong đơn vị đã chuẩn hóa theo độ rộng vai, tức hơn một vai — không phải nhiễu làm tròn.
+- **Hệ quả**: `cache_key` và `data_fingerprint` **đều không** mã hóa thứ tự đi cây, nên hai lần chạy có `data_fingerprint` giống hệt vẫn ăn hai bộ landmark khác nhau. Cache còn đóng băng vĩnh viễn thứ tự của lần chạy đầu → cache nguội và cache ấm cho ra dữ liệu train khác nhau.
+- **Vì sao dễ bỏ sót**: dùng chung một instance là cách viết tự nhiên nhất, và với **một** clip thì nó đúng. Lỗi chỉ xuất hiện từ clip thứ hai, và không có gì báo.
+- **Avoidance/fix**: `extract_video` mở instance MediaPipe **riêng cho mỗi video**; `process_frame` giữ instance dài hạn vì với camera thì mang state qua frame mới là đúng. Giá: 166 ms setup mỗi clip so với ~7 s inference → **+0%** wall clock (đo trên 6 clip: 41,76 s → 41,96 s). Bump `FEATURES_VERSION` lên 2 vì landmark đổi. Test `test_extract_video_is_not_contaminated_by_a_previous_video` dùng Holistic giả có state để khóa hành vi, và `test_live_camera_path_still_carries_state_between_frames` khóa chiều ngược lại.
+
+## Benchmark trên CPU chưa nguội cho số sai gấp 2–3 lần
+
+- **Symptom**: cùng một hàm `augment_sequence`, ba lần đo ra 0,638 / 1,419 / 1,453 ms/mẫu. Chọn số nào cũng "có receipt" mà kết luận khác nhau hẳn.
+- **Cause**: đo ngay sau `pytest` hoặc sau một lượt MediaPipe, CPU còn nóng/còn thread khác. `reviewer` cũng đạp đúng bẫy này và tự loại lần đo đầu (3,558 vs 1,75 ms cho cùng một hàm).
+- **Avoidance/fix**: đo **xen kẽ** hai phương án trong cùng một vòng lặp (A,B,A,B…) rồi lấy `min` — drift CPU triệt tiêu, và tỉ số giữa hai bản là số đáng tin cả khi giá trị tuyệt đối trôi. Nhờ vậy mới ra `1,891 → 0,618 ms = 3,06x` cho việc gộp hai lần nội suy, trong khi đo rời rạc cho ra từ 8% đến 3x tùy lần. **Đừng bao giờ trích một con số tuyệt đối từ một lần đo duy nhất.**
+
 ## Tầng điều phối trong `main()` không có test, nên đổi tên khóa pass hết unit test rồi chết lúc chạy
 
 - **Symptom**: đổi khóa history `train_loss` → `train_loss_smoothed` và `val_loss` → `val_loss_plain_ce`. **20/20 unit test pass.** Chạy `--loso` thật thì `KeyError: 'val_loss'` ở dòng tổng kết fold, sau khi đã extract xong 12 clip và train hết fold đầu.

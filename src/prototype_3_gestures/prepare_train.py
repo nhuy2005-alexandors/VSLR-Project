@@ -483,8 +483,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--num-workers",
         type=non_negative_int,
         default=0,
-        help="DataLoader workers for on-the-fly augmentation. Augmentation costs ~1.1 ms/sample "
-        "single-threaded (~79 s/epoch at 540 clips x 120), so raise this on a real run. Sampling is "
+        help="DataLoader workers for on-the-fly augmentation. Augmentation costs ~0.62 ms/sample "
+        "single-threaded (~40 s/epoch at 540 clips x 120), so raise this on a real run. Sampling is "
         "seeded by position, so worker count never changes the samples produced.",
     )
     return parser

@@ -7,18 +7,19 @@ _Cập nhật: 2026-08-22_
 - **Pipeline feature**: `src/prototype_3_gestures/vsl3/features.py` — MediaPipe Holistic, 67 landmark (25 pose + 21×2 hand) × 3 = `FEATURE_DIM` 201, resample `SEQUENCE_LENGTH` 60, normalize theo trung điểm vai, augment không mirroring. Thêm `FEATURES_VERSION = 1` dùng làm khóa cache.
 - **Model**: `src/prototype_3_gestures/vsl3/model.py` — `GestureLSTM` (BiLSTM, 242.581 tham số ở 3 nhãn). **Sửa pooling**: `out[:, -1, :]` → `cat([out[:, -1, :h], out[:, 0, h:]])`; trước đó một nửa biểu diễn chỉ là hàm của một frame. Checkpoint thiếu khóa `pooling` mặc định về `legacy_last_step` nên artifact cũ vẫn chạy đúng như lúc train.
 - **Train CLI tái cấu trúc**: `prepare_train.py` — `Clip(label, person, path)`, `discover_clips` quét `DIR/<person>/<gesture>/`, cache landmark per-clip, `GestureDataset` augment on-the-fly, `signer_split` theo NGƯỜI. Hai chế độ: `--loso` chỉ đo, mặc định chỉ sản xuất. Xóa `build_dataset`, `source_holdout_split`, `best_state`/`best_epoch`/`final_fit_epochs`, khối refit.
-- **Tests**: `tests/test_core.py` — **30 test**, chạy `python -m pytest` ngày 2026-08-22: **30 passed**. Mutation testing: 7/7 trên pipeline + 3/3 trên `SegmentTracker` đều bị bắt.
+- **Tests**: `tests/test_core.py` — **35 test**, chạy `python -m pytest` ngày 2026-08-22: **35 passed**. Mutation testing: 7/7 trên pipeline + 5/5 trên `SegmentTracker` đều bị bắt.
 - **Realtime đã sửa**: `SegmentTracker` tách khỏi `main()`, cờ `awaiting_hand_drop` chặn bug một cử chỉ ra hai từ, `--max-frames` 150 → 300. As-built: `docs/technical_specs/realtime-segmentation.md`.
 - **Augment thêm time warp**: `time_warp_sequence` bẻ nhịp bên trong cử chỉ (`t → t + w·sin(πt)`). Time stretch toàn cục là no-op vì `extract_video` đã chuẩn hóa thời lượng — xem ADR-006.
 - **Docs**: spec `docs/specs/pipeline-restructure.md` (rev 2 sau `spec-critic`: BLOCKED → 5 blocker đã trả lời), as-built `docs/technical_specs/pipeline-restructure.md`, ADR-003/004/005, 4 gotcha mới.
 - **Vòng `reviewer` xong**: verdict BLOCKED → 2 blocker + 6 should-fix + nits, **đã xử lý hết**. Reviewer xác nhận không có đường leakage, pooling đúng khi đối chiếu `h_n`, mode tách đúng. Hai blocker đều ở nhánh xử lý lỗi: nhãn mất hết clip biến khỏi class set, và cache hỏng bị tính là clip quay tệ. Bảng đầy đủ trong as-built doc.
-- **Thêm sau review**: `data_fingerprint` + `created_at` + `seed`/`lr`/`batch_size` trong cả hai report (ghép được hai file), `--num-workers` (augment ~79 s/epoch ở 540 clip), `macro_mean_accuracy` + `pooled_accuracy`, cảnh báo khi checkpoint thiếu `pooling` hoặc lệch `features_version`.
+- **Thêm sau review**: `data_fingerprint` + `created_at` + `seed`/`lr`/`batch_size` trong cả hai report (ghép được hai file), `--num-workers` (augment ~40 s/epoch ở 540 clip), `macro_mean_accuracy` + `pooled_accuracy`, cảnh báo khi checkpoint thiếu `pooling` hoặc lệch `features_version`.
 - **Spec quay rev 2**: `docs/specs/dataset-recording.md` — 27 nhãn × 5 người × 4 clip, quay tuần tự P1→P5, bắt buộc kiểm sau P1.
 - **Khảo sát repo tham chiếu**: `dataset/legacy/` chính là dataset của `photienanh/Vietnamese-Sign-Language-Recognition` — 4362 video / **3315 nhãn** (2765 nhãn chỉ 1 clip; nhóm 3 clip là biến thể phương ngữ B/N/T, không phải 3 người). Model đó 2764 class, split random trên 1001 bản augment mỗi clip → leakage; notebook 0 output, không có con số accuracy nào.
 
 ## In progress
 
-- Chưa commit gì. `src/` + `tests/` modified (+911 / −231 dòng); `docs/`, `CLAUDE.md`, `.claudeignore`, `models/backups/` untracked.
+- Nhánh `pipeline-signer-split`, 3 commit: `70b9ff8` (signer split + xóa cơ chế chọn epoch), `293dee5` (segmentation + time warp), và commit sửa audit. Chưa merge vào `main`.
+- **Chưa commit có chủ ý**: `models/gesture_lstm.pt` + `models/metrics.json` (artifact 1 epoch pooling cũ), `models/backups/`, 18 clip `.mov` untracked trong `dataset/raw/`.
 
 ## Next
 
@@ -33,7 +34,7 @@ _Cập nhật: 2026-08-22_
 
 ```powershell
 $env:PYTHONIOENCODING="utf-8"
-python -m pytest                                      # 30 passed
+python -m pytest                                      # 35 passed
 vslr-train --data-dir <cây P1..Pn> --loso --num-workers 4   # đo; ghi models/loso_report.json
 vslr-camera --no-tts                                  # camera, chưa phát giọng
 ```

@@ -62,7 +62,7 @@ Không đổi: `normalize_landmarks`, `augment_sequence`, `resample_sequence`, `
 | **BLOCKER** cache `.npz` hỏng bị tính là "clip quay tệ", không retry, và người quay bị bảo đi quay lại một clip tốt | `np.load` bọc try/except → `unlink()` entry hỏng → rơi xuống extract lại. Ghi cache thành best-effort (`_write_cache_entry`), lỗi IO chỉ warn, không vào danh sách clip lỗi. Có unit test dựng cache hỏng thật |
 | `--epochs 0` ship checkpoint random-init, exit 0; `--epochs 0 --loso` crash `IndexError` | `type=positive_int` cho `--epochs`/`--batch-size`, `non_negative_int` cho `--augment`/`--seed`/`--num-workers` |
 | Re-validate sau drop nằm ngoài try/except → traceback trần sau cả lượt extract | Bọc vào `SystemExit` kèm số clip đã drop |
-| Augment tính lại mỗi epoch dù seed làm nó giống hệt: ~79 s/epoch ở 540 clip, ~3,2 h cho LOSO | Thêm `--num-workers` (+ `persistent_workers`). Đã chạy thật `--num-workers 2` trên Windows, exit 0 |
+| Augment tính lại mỗi epoch dù seed làm nó giống hệt: ~40 s/epoch ở 540 clip, ~2,2 h cho LOSO | Thêm `--num-workers` (+ `persistent_workers`). Đã chạy thật `--num-workers 2` trên Windows, exit 0 |
 | Report không tái lập được: thiếu `seed`, `learning_rate`, `batch_size`, timestamp; và hai file không chứng minh được là cùng một dữ liệu | `run_metadata()` dùng chung cho cả hai file, thêm `created_at` + `data_fingerprint` (sha1 trên `(person, label, path, mtime)` đã sort). Đã kiểm: hai file cùng fingerprint `66149052a58a…` |
 | `features_version` ghi vào checkpoint mà không ai đọc | `load_checkpoint` so với `FEATURES_VERSION` hiện tại, lệch thì `warnings.warn` |
 | Checkpoint mất khóa `pooling` mispredict âm thầm | `load_checkpoint` warn khi thiếu khóa. Đã kiểm: checkpoint cũ → 1 cảnh báo; checkpoint mới → 0 |
@@ -115,7 +115,7 @@ Cây tạm và file tạm đã xóa. `models/` **không** bị ghi trong quá tr
 ## Watch-outs
 
 - **`FEATURES_VERSION` phải tăng tay.** Sửa `normalize_landmarks`, trim/margin, stride, hay ngưỡng confidence mà quên tăng nó → cache trả landmark cũ và mọi số phía sau mô tả extractor cũ, không có gì báo. (Checkpoint thì có: `load_checkpoint` warn khi lệch.)
-- **`--num-workers` mặc định 0.** Augment tốn ~1,1 ms/mẫu single-thread → ~79 s/epoch ở 540 clip × 120, tức ~53 phút cho `--epochs 40` và ~3,2 h cho LOSO 5 fold (số ngoại suy từ đo 7.260 mẫu, chưa chạy thật ở 540 clip). Trên run thật nhớ đặt `--num-workers 4` trở lên. Seed theo vị trí nên số worker **không** đổi mẫu sinh ra.
+- **`--num-workers` mặc định 0.** Augment tốn ~0,62 ms/mẫu single-thread → ~40 s/epoch ở 540 clip × 120, tức ~27 phút cho `--epochs 40` và ~2,2 h cho LOSO 5 fold (ngoại suy từ benchmark xen kẽ 250×11 vòng, chưa chạy thật ở 540 clip). Trên run thật nhớ đặt `--num-workers 4` trở lên. Seed theo vị trí nên số worker **không** đổi mẫu sinh ra.
 - **`dataset/processed/dataset_3gestures.npz` không còn được sinh ra.** File 136 MB cũ vẫn nằm trên đĩa (ignored), xóa được.
 - **Checkpoint hiện tại trong `models/` chưa được train lại.** Vẫn là model 1 epoch pooling cũ; `vslr-camera` chạy được nhờ đường lùi (kèm một cảnh báo), nhưng chưa hưởng lợi từ bản sửa pooling. Train lại cần quyết định của chủ dự án vì nó ghi đè artifact đang track.
 - **`--epochs 40` là con số chọn tay, chưa tune.** Muốn tune tử tế cần inner split lồng trong từng fold.

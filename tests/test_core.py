@@ -3,7 +3,10 @@ import warnings
 from argparse import Namespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
+import cv2
+import mediapipe as mp
 import numpy as np
 import torch
 
@@ -25,6 +28,7 @@ from prototype_3_gestures.vsl3.features import (
     FEATURE_DIM,
     FEATURES_VERSION,
     SEQUENCE_LENGTH,
+    HolisticExtractor,
     augment_sequence,
     resample_sequence,
     time_warp_sequence,
@@ -78,6 +82,92 @@ class FeatureTests(unittest.TestCase):
         sequence[:, :9] = 0.5
         warped = time_warp_sequence(sequence, np.random.default_rng(3))
         self.assertTrue(np.all(warped[:, 9:] == 0.0))
+
+
+class _FakeLandmark:
+    __slots__ = ("x", "y", "z")
+
+    def __init__(self, x, y, z):
+        self.x, self.y, self.z = x, y, z
+
+
+class _FakeLandmarkList:
+    def __init__(self, points):
+        self.landmark = [_FakeLandmark(*p) for p in points]
+
+
+class _FakeResults:
+    """Landmarks that drift with how many frames this instance has already seen.
+
+    Stands in for MediaPipe's real temporal behaviour: `smooth_landmarks=True` with
+    `static_image_mode=False` carries tracking state from frame to frame.
+    """
+
+    def __init__(self, drift):
+        pose = [(0.5, 0.5, 0.0)] * 25
+        pose[11] = (0.4 + drift, 0.5, 0.0)
+        pose[12] = (0.6 + drift, 0.5, 0.0)
+        self.pose_landmarks = _FakeLandmarkList(pose)
+        self.left_hand_landmarks = _FakeLandmarkList([(0.45 + drift, 0.4, 0.0)] * 21)
+        self.right_hand_landmarks = _FakeLandmarkList([(0.55 + drift, 0.4, 0.0)] * 21)
+
+
+class _FakeHolistic:
+    constructions = 0
+
+    def __init__(self, **kwargs):
+        type(self).constructions += 1
+        self.frames_seen = 0
+
+    def process(self, image):
+        self.frames_seen += 1
+        return _FakeResults(self.frames_seen * 0.002)
+
+    def close(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def _write_dummy_video(path: Path, frames: int = 20) -> Path:
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (64, 64))
+    for index in range(frames):
+        writer.write(np.full((64, 64, 3), (index * 10) % 255, dtype=np.uint8))
+    writer.release()
+    return path
+
+
+class ExtractorIsolationTests(unittest.TestCase):
+    def test_extract_video_is_not_contaminated_by_a_previous_video(self):
+        """One clip's landmarks must not depend on which clip was extracted before it.
+
+        Sharing one MediaPipe instance across clips made every clip after the first a function of
+        the tree-walk order, which neither the cache key nor the data fingerprint records.
+        """
+        with TemporaryDirectory() as tmp:
+            video = _write_dummy_video(Path(tmp) / "a.mp4")
+            _FakeHolistic.constructions = 0
+            with mock.patch.object(mp.solutions.holistic, "Holistic", _FakeHolistic):
+                with HolisticExtractor() as extractor:
+                    first, _ = extractor.extract_video(video, SEQUENCE_LENGTH)
+                    second, _ = extractor.extract_video(video, SEQUENCE_LENGTH)
+
+        np.testing.assert_array_equal(first, second)
+
+    def test_live_camera_path_still_carries_state_between_frames(self):
+        """process_frame is the camera stream: smoothing across frames there is the point."""
+        _FakeHolistic.constructions = 0
+        with mock.patch.object(mp.solutions.holistic, "Holistic", _FakeHolistic):
+            with HolisticExtractor() as extractor:
+                frame = np.zeros((64, 64, 3), dtype=np.uint8)
+                one = extractor.process_frame(frame).features
+                two = extractor.process_frame(frame).features
+
+        self.assertFalse(np.array_equal(one, two), "the live path must keep temporal state")
 
 
 class ModelTests(unittest.TestCase):
@@ -412,6 +502,52 @@ class SegmentTrackerTests(unittest.TestCase):
             if done is not None:
                 segments.append(done)
         return segments
+
+    def test_cap_reached_after_hands_are_down_does_not_swallow_the_next_word(self):
+        """awaiting_hand_drop only makes sense when the cap hit while the hands were still up.
+
+        If the cap is reached inside the no-hand tail the hands are already down, so the next
+        gesture must be allowed to start immediately instead of being dropped.
+        """
+        tracker = SegmentTracker(word_gap=0.45, max_frames=5)
+        script = [(True, 0.0), (True, 0.05), (True, 0.10)]      # 3 frames
+        script += [(False, 0.15), (False, 0.20)]                 # tail fills to 5 -> cap closes it
+        script += [(True, 0.25 + i * 0.05) for i in range(5)]    # next gesture, back up quickly
+
+        segments = self._feed(tracker, script)
+
+        # The second gesture also ends on the cap, this time with the hands still up, so the flag
+        # is legitimately set at the end — what matters is that the second word was not swallowed.
+        self.assertEqual(len(segments), 2)
+        self.assertEqual([len(s) for s in segments], [5, 5])
+
+    def test_one_dropped_detection_frame_does_not_reopen_the_segment(self):
+        """A single no-hand frame is noise everywhere else in this state machine, so it must not
+        be enough to clear awaiting_hand_drop either.
+
+        The close path below tolerates no-hand runs shorter than word_gap; clearing the flag on the
+        first no-hand frame used a different rule for the same signal, so one frame of motion blur
+        mid-gesture let the next frame open a second word.
+        """
+        tracker = SegmentTracker(word_gap=0.45, max_frames=10)
+        dt = 1.0 / 30.0
+        script = [(True, i * dt) for i in range(20)]
+        script += [(False, 20 * dt)]                                  # one dropped detection
+        script += [(True, i * dt) for i in range(21, 40)]              # hands never actually came down
+
+        segments = self._feed(tracker, script)
+
+        self.assertEqual(len(segments), 1, "a detection blink is not the hands coming down")
+
+    def test_no_hand_tail_cannot_push_a_segment_past_max_frames(self):
+        """--max-frames is documented as a hard cap, so the tail branch has to honour it too."""
+        tracker = SegmentTracker(word_gap=3.0, max_frames=10)
+        script = [(True, i * 0.01) for i in range(5)] + [(False, 0.05 + i * 0.01) for i in range(200)]
+
+        segments = self._feed(tracker, script)
+
+        self.assertTrue(segments, "the segment must close")
+        self.assertLessEqual(max(len(s) for s in segments), 10)
 
     def test_slow_gesture_does_not_become_two_words(self):
         """Hitting --max-frames must not reopen a segment while the hands are still up.

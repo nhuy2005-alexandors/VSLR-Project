@@ -18,7 +18,9 @@ SEQUENCE_LENGTH = 60
 # rule, the sampling stride, or HolisticExtractor's confidence defaults. The landmark cache
 # keys on this, so forgetting to bump it serves stale landmarks from a previous extractor
 # and every number downstream silently describes the old one.
-FEATURES_VERSION = 1
+#   v2 (2026-08-22): extract_video uses a fresh MediaPipe instance per clip. Before that a
+#   clip's landmarks depended on which clip was extracted before it.
+FEATURES_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,34 @@ def normalize_landmarks(points: np.ndarray) -> np.ndarray:
     return normalized.reshape(-1)
 
 
+def _sample_at(sequence: np.ndarray, positions: np.ndarray) -> np.ndarray:
+    """Linear interpolation of every feature column at fractional frame `positions`.
+
+    One vectorised lerp over the whole [frames, FEATURE_DIM] block instead of FEATURE_DIM separate
+    `np.interp` calls — measured ~16x faster at 201 columns. Positions are clamped to the valid
+    range, matching `np.interp`'s edge behaviour.
+    """
+    last = len(sequence) - 1
+    positions = np.clip(np.asarray(positions, dtype=np.float64), 0.0, last)
+    lower = np.floor(positions).astype(np.int64)
+    upper = np.minimum(lower + 1, last)
+    frac = (positions - lower).astype(np.float32)[:, None]
+    return (sequence[lower] * (1.0 - frac) + sequence[upper] * frac).astype(np.float32)
+
+
+def _warp_positions(n_frames: int, rng: np.random.Generator, max_warp: float = 0.30) -> np.ndarray:
+    """A monotone reparameterisation of [0, 1] sampled on `n_frames` points.
+
+    `t -> t + w*sin(pi*t)` keeps both endpoints pinned and stays monotone while |w| < 1/pi, so
+    max_warp must stay below that: the derivative bottoms out at 1 - max_warp*pi.
+    """
+    if not 0.0 <= max_warp < 1.0 / np.pi:
+        raise ValueError(f"max_warp must be in [0, 1/pi); got {max_warp}")
+    warp = float(rng.uniform(-max_warp, max_warp))
+    normalized = np.linspace(0.0, 1.0, n_frames, dtype=np.float64)
+    return normalized + warp * np.sin(np.pi * normalized)
+
+
 def resample_sequence(sequence: np.ndarray, target_len: int = SEQUENCE_LENGTH) -> np.ndarray:
     sequence = np.asarray(sequence, dtype=np.float32)
     if sequence.ndim != 2 or sequence.shape[1] != FEATURE_DIM:
@@ -91,13 +121,7 @@ def resample_sequence(sequence: np.ndarray, target_len: int = SEQUENCE_LENGTH) -
         raise ValueError("Cannot resample an empty sequence")
     if len(sequence) == 1:
         return np.repeat(sequence, target_len, axis=0)
-
-    source_t = np.linspace(0.0, 1.0, len(sequence), dtype=np.float32)
-    target_t = np.linspace(0.0, 1.0, target_len, dtype=np.float32)
-    output = np.empty((target_len, FEATURE_DIM), dtype=np.float32)
-    for feature_idx in range(FEATURE_DIM):
-        output[:, feature_idx] = np.interp(target_t, source_t, sequence[:, feature_idx])
-    return output
+    return _sample_at(sequence, np.linspace(0.0, len(sequence) - 1, target_len, dtype=np.float64))
 
 
 def time_warp_sequence(sequence: np.ndarray, rng: np.random.Generator, max_warp: float = 0.30) -> np.ndarray:
@@ -106,9 +130,6 @@ def time_warp_sequence(sequence: np.ndarray, rng: np.random.Generator, max_warp:
     `extract_video` trims to the hand-active range and resamples to a fixed length, so absolute
     duration carries no information here — a global speed-up would be a no-op. What genuinely
     varies between signers is *where inside* the gesture they linger, and that is what this warps.
-
-    Uses t -> t + w*sin(pi*t): endpoints stay pinned and the map is monotone while |w| < 1/pi,
-    so max_warp is capped below that (derivative bottoms out at 1 - 0.30*pi > 0).
     """
     sequence = np.asarray(sequence, dtype=np.float32)
     if sequence.ndim != 2 or sequence.shape[1] != FEATURE_DIM:
@@ -116,16 +137,7 @@ def time_warp_sequence(sequence: np.ndarray, rng: np.random.Generator, max_warp:
     n_frames = len(sequence)
     if n_frames < 3:
         return sequence.copy()
-
-    warp = float(rng.uniform(-max_warp, max_warp))
-    normalized = np.linspace(0.0, 1.0, n_frames, dtype=np.float64)
-    source = (normalized + warp * np.sin(np.pi * normalized)) * (n_frames - 1)
-    grid = np.arange(n_frames, dtype=np.float64)
-
-    output = np.empty_like(sequence)
-    for feature_idx in range(FEATURE_DIM):
-        output[:, feature_idx] = np.interp(source, grid, sequence[:, feature_idx])
-    return output
+    return _sample_at(sequence, _warp_positions(n_frames, rng, max_warp) * (n_frames - 1))
 
 
 def augment_sequence(sequence: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -140,10 +152,12 @@ def augment_sequence(sequence: np.ndarray, rng: np.random.Generator) -> np.ndarr
     crop_right = int(rng.integers(0, max_crop + 1))
     end = n_frames - crop_right
     cropped = sequence[crop_left:end] if end - crop_left >= 8 else sequence
-    augmented = resample_sequence(cropped, n_frames)
-    # Crop only trims the ends; this varies the timing *inside* the gesture, which is the part
-    # that differs between signers once duration has been normalised away.
-    augmented = time_warp_sequence(augmented, rng)
+    # Crop-resample and time-warp composed into ONE interpolation. Doing them in sequence cost two
+    # passes and applied a second, unintended low-pass; composing is ~2.9x faster and sharper.
+    if len(cropped) < 3:
+        augmented = resample_sequence(cropped, n_frames)
+    else:
+        augmented = _sample_at(cropped, _warp_positions(n_frames, rng) * (len(cropped) - 1))
 
     pts = augmented.reshape(n_frames, N_LANDMARKS, 3).copy()
     valid = np.any(np.abs(pts) > 1e-8, axis=2)
@@ -176,16 +190,19 @@ def augment_sequence(sequence: np.ndarray, rng: np.random.Generator) -> np.ndarr
 
 class HolisticExtractor:
     def __init__(self, min_detection_confidence: float = 0.45, min_tracking_confidence: float = 0.45):
-        self._holistic = mp.solutions.holistic.Holistic(
+        self._config = dict(
             static_image_mode=False,
             model_complexity=1,
             smooth_landmarks=True,
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
         )
+        # Long-lived, used only by process_frame: on a live camera stream, carrying tracking and
+        # smoothing state across frames is exactly what we want.
+        self._live = mp.solutions.holistic.Holistic(**self._config)
 
     def close(self) -> None:
-        self._holistic.close()
+        self._live.close()
 
     def __enter__(self) -> "HolisticExtractor":
         return self
@@ -193,12 +210,15 @@ class HolisticExtractor:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
-    def process_frame(self, frame_bgr: np.ndarray) -> FrameObservation:
+    def _observe(self, frame_bgr: np.ndarray, holistic) -> FrameObservation:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         rgb.flags.writeable = False
-        results = self._holistic.process(rgb)
+        results = holistic.process(rgb)
         points, hands_present = _to_landmark_array(results)
         return FrameObservation(normalize_landmarks(points), hands_present)
+
+    def process_frame(self, frame_bgr: np.ndarray) -> FrameObservation:
+        return self._observe(frame_bgr, self._live)
 
     def extract_video(self, video_path: str | Path, target_len: int = SEQUENCE_LENGTH) -> tuple[np.ndarray, dict]:
         video_path = Path(video_path)
@@ -213,16 +233,22 @@ class HolisticExtractor:
         hand_frames = 0
         frame_index = 0
 
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if frame_index % stride == 0:
-                obs = self.process_frame(frame)
-                frames.append(obs.features)
-                hand_flags.append(obs.hands_present)
-                hand_frames += int(obs.hands_present)
-            frame_index += 1
+        # A FRESH instance per video. With smooth_landmarks=True the model carries state between
+        # frames, so one shared instance made every clip a function of whichever clip was extracted
+        # before it — measured at up to 1.36 shoulder-widths of drift. Neither the landmark cache
+        # key nor data_fingerprint records tree-walk order, so that silently broke reproducibility.
+        # Costs ~166 ms of setup per clip against ~7 s of inference: +0% wall clock, measured.
+        with mp.solutions.holistic.Holistic(**self._config) as holistic:
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if frame_index % stride == 0:
+                    obs = self._observe(frame, holistic)
+                    frames.append(obs.features)
+                    hand_flags.append(obs.hands_present)
+                    hand_frames += int(obs.hands_present)
+                frame_index += 1
         cap.release()
 
         if len(frames) < 8:

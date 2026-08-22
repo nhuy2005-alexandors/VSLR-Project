@@ -105,9 +105,9 @@ Mỗi ràng buộc đến từ code đang có, không phải sở thích:
 | Tay rõ trong khung | MediaPipe thấy tay dưới 10% số frame → clip bị raise, loại thẳng | `vsl3/features.py:194-198` |
 | 1 giây tay hạ ở hai đầu clip | trim về vùng thấy tay, chỉ chừa margin 4 frame | `vsl3/features.py:200-206` |
 | Nhịp 0,5s / 2,5s trong clip câu | khớp `--word-gap 0.45` và `--sentence-gap 2.2` | `realtime.py:77-78` |
-| Múa chậm nhưng dưới ~5 giây mỗi cử chỉ | `--max-frames 150` force-commit giữa cử chỉ rồi mở segment mới khi tay còn giơ → một cử chỉ thành hai từ | `realtime.py:139-141` |
+| Múa chậm nhưng dưới ~5 giây mỗi cử chỉ | `--max-frames` (mặc định 300) cắt segment rồi **bỏ** phần đuôi của cử chỉ đó | `realtime.py`, `SegmentTracker` |
 
-Ràng buộc cuối là bug đã biết của realtime, sẽ vá riêng. Trong lúc chờ, cứ quay chậm bình thường; khi test camera thì chạy `--max-frames 300`.
+Bug "một cử chỉ thành hai từ" đã vá (`docs/technical_specs/realtime-segmentation.md`). Ràng buộc còn lại: quá `--max-frames` thì đuôi cử chỉ bị bỏ, nên cứ quay chậm bình thường và đừng để một cử chỉ vượt ~5 giây.
 
 ## Decisions
 
