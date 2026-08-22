@@ -100,6 +100,34 @@ def resample_sequence(sequence: np.ndarray, target_len: int = SEQUENCE_LENGTH) -
     return output
 
 
+def time_warp_sequence(sequence: np.ndarray, rng: np.random.Generator, max_warp: float = 0.30) -> np.ndarray:
+    """Bend a sequence's internal timing, without changing its length or running it backwards.
+
+    `extract_video` trims to the hand-active range and resamples to a fixed length, so absolute
+    duration carries no information here — a global speed-up would be a no-op. What genuinely
+    varies between signers is *where inside* the gesture they linger, and that is what this warps.
+
+    Uses t -> t + w*sin(pi*t): endpoints stay pinned and the map is monotone while |w| < 1/pi,
+    so max_warp is capped below that (derivative bottoms out at 1 - 0.30*pi > 0).
+    """
+    sequence = np.asarray(sequence, dtype=np.float32)
+    if sequence.ndim != 2 or sequence.shape[1] != FEATURE_DIM:
+        raise ValueError(f"Expected [frames, {FEATURE_DIM}], got {sequence.shape}")
+    n_frames = len(sequence)
+    if n_frames < 3:
+        return sequence.copy()
+
+    warp = float(rng.uniform(-max_warp, max_warp))
+    normalized = np.linspace(0.0, 1.0, n_frames, dtype=np.float64)
+    source = (normalized + warp * np.sin(np.pi * normalized)) * (n_frames - 1)
+    grid = np.arange(n_frames, dtype=np.float64)
+
+    output = np.empty_like(sequence)
+    for feature_idx in range(FEATURE_DIM):
+        output[:, feature_idx] = np.interp(source, grid, sequence[:, feature_idx])
+    return output
+
+
 def augment_sequence(sequence: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     """Mild landmark augmentation; intentionally avoids left/right mirroring."""
     sequence = np.asarray(sequence, dtype=np.float32)
@@ -113,6 +141,9 @@ def augment_sequence(sequence: np.ndarray, rng: np.random.Generator) -> np.ndarr
     end = n_frames - crop_right
     cropped = sequence[crop_left:end] if end - crop_left >= 8 else sequence
     augmented = resample_sequence(cropped, n_frames)
+    # Crop only trims the ends; this varies the timing *inside* the gesture, which is the part
+    # that differs between signers once duration has been normalised away.
+    augmented = time_warp_sequence(augmented, rng)
 
     pts = augmented.reshape(n_frames, N_LANDMARKS, 3).copy()
     valid = np.any(np.abs(pts) > 1e-8, axis=2)

@@ -45,3 +45,11 @@ Quyết định kiến trúc + LÝ DO. Tích lũy, không xóa.
 - **Decision**: `pool_sequence` trả `cat([out[:, -1, :hidden], out[:, 0, hidden:]])`. Thêm khóa `pooling` vào config checkpoint; `load_checkpoint` mặc định về `legacy_last_step` khi checkpoint **không có** khóa đó.
 - **Reasoning**: không đổi số chiều nên `head` và config không đổi. Đường lùi là bắt buộc: `models/gesture_lstm.pt` đang được track trong git được train với pooling cũ, load nó bằng pooling mới sẽ dự đoán sai **âm thầm** — tệ hơn lỗi rõ ràng.
 - **Trade-offs**: một nhánh `if` sống mãi trong `pool_sequence`. Bỏ được khi không còn checkpoint legacy nào đang dùng.
+
+## ADR-006: Augment bằng time WARP phi tuyến, không phải time stretch
+
+- **Date**: 2026-08-22
+- **Context**: `augment_sequence` chỉ có phép hình học (xoay ±5°, scale ±6%, jitter σ=0,012, crop ±8%). Dự định ban đầu là thêm "time stretch" để phủ chuyện người múa nhanh/chậm khác nhau.
+- **Decision**: thêm `time_warp_sequence(sequence, rng, max_warp=0.30)` dùng phép biến đổi trục thời gian `t → t + w·sin(πt)`, gọi trong `augment_sequence` sau bước crop. **Không** thêm time stretch toàn cục.
+- **Reasoning**: time stretch toàn cục là **no-op** ở pipeline này. `extract_video` trim về vùng thấy tay rồi resample về đúng `SEQUENCE_LENGTH` 60 frame, nên thời lượng tuyệt đối đã bị chuẩn hóa mất — múa 2 giây và múa 5 giây ra cùng một chuỗi 60 frame. Thứ **thật sự** khác nhau giữa người ký là *nhịp bên trong* cử chỉ: ai dừng lâu ở đâu. Đó là cái `t → t + w·sin(πt)` bẻ: hai đầu bị ghim (t=0 → 0, t=1 → 1) nên không đổi vị trí bắt đầu/kết thúc, và ánh xạ còn đơn điệu khi `|w| < 1/π ≈ 0,318` nên không bao giờ chạy ngược thời gian. `max_warp = 0.30` giữ đạo hàm nhỏ nhất ở `1 − 0,30π ≈ 0,058 > 0`. Đo 500 seed: đơn điệu 100%, điểm giữa của một ramp thời gian chạy từ 0,211 đến 0,807 (gốc 0,508).
+- **Trade-offs**: không bump `FEATURES_VERSION` vì cache chỉ giữ landmark gốc, không giữ bản augment — nhưng **phân phối augment đã đổi**, nên bất kỳ con số đo trước thay đổi này đều không so sánh trực tiếp được với con số sau. Hiện chưa có con số nào nên không mất gì.

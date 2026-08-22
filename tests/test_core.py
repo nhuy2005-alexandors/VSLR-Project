@@ -27,9 +27,10 @@ from prototype_3_gestures.vsl3.features import (
     SEQUENCE_LENGTH,
     augment_sequence,
     resample_sequence,
+    time_warp_sequence,
 )
 from prototype_3_gestures.vsl3.model import GestureLSTM
-from prototype_3_gestures.realtime import should_accept_prediction
+from prototype_3_gestures.realtime import SegmentTracker, should_accept_prediction
 
 
 def _clip(label: str, person: str, name: str = "a.mov") -> Clip:
@@ -52,6 +53,31 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(output.shape, sequence.shape)
         self.assertTrue(np.isfinite(output).all())
         self.assertTrue(np.all(output[:, 9:] == 0.0))
+
+
+    def test_time_warp_preserves_endpoints_and_bends_the_middle(self):
+        """Absolute duration is already normalised away by extract_video's resample, so what is
+        worth augmenting is INTERNAL timing — where in the gesture the signer lingers."""
+        ramp = np.zeros((60, FEATURE_DIM), dtype=np.float32)
+        ramp[:, :3] = np.linspace(0.0, 1.0, 60, dtype=np.float32)[:, None]
+
+        midpoints = set()
+        for seed in range(40):
+            warped = time_warp_sequence(ramp, np.random.default_rng(seed))
+            self.assertEqual(warped.shape, ramp.shape)
+            self.assertAlmostEqual(float(warped[0, 0]), 0.0, places=4)
+            self.assertAlmostEqual(float(warped[-1, 0]), 1.0, places=4)
+            self.assertTrue(np.all(np.diff(warped[:, 0]) >= -1e-5), "a time warp must not run backwards")
+            midpoints.add(round(float(warped[30, 0]), 3))
+
+        self.assertGreater(len(midpoints), 5, "the middle of a time ramp must actually move")
+        self.assertGreater(max(midpoints) - min(midpoints), 0.05, "warp too weak to matter")
+
+    def test_time_warp_leaves_missing_landmarks_at_zero(self):
+        sequence = np.zeros((60, FEATURE_DIM), dtype=np.float32)
+        sequence[:, :9] = 0.5
+        warped = time_warp_sequence(sequence, np.random.default_rng(3))
+        self.assertTrue(np.all(warped[:, 9:] == 0.0))
 
 
 class ModelTests(unittest.TestCase):
@@ -373,6 +399,67 @@ class ArgumentTests(unittest.TestCase):
 
         args = build_parser().parse_args(["--data-dir", "x", "--epochs", "1", "--augment", "0"])
         self.assertEqual((args.epochs, args.augment, args.num_workers, args.loso), (1, 0, 0, False))
+
+
+class SegmentTrackerTests(unittest.TestCase):
+    """The boundary rules used to live inline in realtime.main(), untestable without a camera."""
+
+    def _feed(self, tracker, script):
+        """script: list of (hands_present, now). Returns every segment the tracker completed."""
+        segments = []
+        for index, (hands_present, now) in enumerate(script):
+            done = tracker.feed(hands_present, np.full(3, float(index), dtype=np.float32), now)
+            if done is not None:
+                segments.append(done)
+        return segments
+
+    def test_slow_gesture_does_not_become_two_words(self):
+        """Hitting --max-frames must not reopen a segment while the hands are still up.
+
+        The old loop set in_segment = False on the forced commit, so the very next frame — hands
+        still raised, mid-gesture — started a new word. One slow gesture became two.
+        """
+        tracker = SegmentTracker(word_gap=0.45, max_frames=10)
+        script = [(True, i * 0.1) for i in range(25)] + [(False, 2.5 + i * 0.1) for i in range(10)]
+
+        segments = self._feed(tracker, script)
+
+        self.assertEqual(len(segments), 1, "one continuous gesture must yield exactly one segment")
+        self.assertEqual(len(segments[0]), 10)
+
+    def test_new_gesture_starts_only_after_hands_drop(self):
+        tracker = SegmentTracker(word_gap=0.45, max_frames=10)
+        script = (
+            [(True, i * 0.1) for i in range(15)]          # forced cut at frame 10, rest ignored
+            + [(False, 1.5 + i * 0.1) for i in range(10)]  # hands down past word_gap
+            + [(True, 2.6 + i * 0.1) for i in range(10)]   # a genuinely new gesture
+            + [(False, 3.7 + i * 0.1) for i in range(10)]
+        )
+
+        segments = self._feed(tracker, script)
+
+        self.assertEqual(len(segments), 2)
+
+    def test_word_gap_closes_a_segment_and_short_blips_do_not(self):
+        tracker = SegmentTracker(word_gap=0.45, max_frames=150)
+        blip = [(True, 0.0), (True, 0.1), (True, 0.2), (False, 0.3), (True, 0.4), (True, 0.5)]
+        self.assertEqual(self._feed(tracker, blip), [], "a gap under word_gap must not split")
+
+        segments = self._feed(tracker, [(False, 0.6), (False, 1.2)])
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(len(segments[0]), 7, "frames inside the sub-gap stay in the segment")
+
+    def test_force_boundary_and_reset(self):
+        tracker = SegmentTracker(word_gap=0.45, max_frames=150)
+        self._feed(tracker, [(True, i * 0.1) for i in range(5)])
+        forced = tracker.force_boundary()
+        self.assertEqual(len(forced), 5)
+        self.assertIsNone(tracker.force_boundary(), "nothing open, nothing to force")
+
+        self._feed(tracker, [(True, 1.0), (True, 1.1)])
+        tracker.reset()
+        self.assertIsNone(tracker.force_boundary())
+        self.assertFalse(tracker.in_segment)
 
 
 class RealtimeLogicTests(unittest.TestCase):
