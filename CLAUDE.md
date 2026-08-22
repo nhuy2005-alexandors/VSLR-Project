@@ -11,6 +11,7 @@ Python >= 3.11, setuptools + pytest, PyTorch, MediaPipe 0.10.21, OpenCV 4.11.
 | Cài | `python -m pip install -e ".[tts]"` |
 | Test | `python -m pytest` (`pythonpath=src`, `testpaths=tests` trong `pyproject.toml`) |
 | Build | không có build step — package thuần Python, cài editable là đủ |
+| Nghiệm thu clip | `vslr-check --data-dir dataset/raw` — clip nào phải quay lại, còn thiếu cặp nào. Không train. Exit 1 nếu chưa đạt |
 | Train | `vslr-train --data-dir dataset/raw` — train mọi clip, **không holdout, không kèm accuracy** |
 | Đo accuracy | `vslr-train --data-dir dataset/raw --loso` — ghi `models/loso_report.json`, **không** ghi checkpoint |
 | Train một người | `vslr-train --video "Nhãn=path.mov" ...` (≥ 2 clip mỗi nhãn; `--loso` bị từ chối vì không có ID người) |
@@ -47,6 +48,7 @@ Prompt cho sub phải self-contained (path, dòng, spec, kết quả mong đợi
 
 | Path | Nội dung | Git |
 |---|---|---|
+| `dataset/labels.txt` | **nguồn sự thật duy nhất** cho tập nhãn; `vslr-check` đọc nó để biết còn thiếu nhãn nào (cây không nói được) | tracked |
 | `dataset/raw/` | 27 clip train (1–9 mỗi nhãn); tên file **không** mã hóa người ký nên chỉ chạy được chế độ một-người | tracked |
 | `dataset/processed/landmark_cache/` | cache landmark `.npz` mỗi clip, khóa theo `(path, mtime, FEATURES_VERSION)` — xóa được, tự sinh lại | ignored |
 | `dataset/legacy/` | bộ từ điển VSL crawl từ bên thứ ba: `Videos/` 4362 `.mp4`, `Text/label_all.csv` 3315 nhãn (~1,5 clip/nhãn) | ignored |

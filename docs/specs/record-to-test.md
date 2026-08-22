@@ -27,7 +27,10 @@ Sau buổi quay, người dùng chỉ chạy lệnh — không viết thêm code
 
 Hiện cả ba đều thiếu. Đây không phải bug — pipeline chạy đúng — mà là ba việc nó không làm.
 
-## Lỗ hổng 1: không có lệnh nghiệm thu tại chỗ quay
+## Lỗ hổng 1: không có lệnh nghiệm thu tại chỗ quay — **ĐÃ LÀM** (`vslr-check`)
+
+_Xong 2026-08-22. Xem `docs/technical_specs/check-tool.md`. Phần dưới là spec gốc, giữ để đối chiếu._
+
 
 `docs/specs/dataset-recording.md` bắt "trích xuất 108 clip vừa quay, xem `hand_frame_ratio`, clip nào < 0,5 quay lại ngay". Nhưng **không có lệnh nào làm việc đó**. Muốn xem `hand_frame_ratio` hiện phải chạy cả lượt train.
 

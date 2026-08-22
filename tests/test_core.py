@@ -1,3 +1,4 @@
+import unicodedata
 import unittest
 import warnings
 from argparse import Namespace
@@ -23,6 +24,12 @@ from prototype_3_gestures.prepare_train import (
     signer_split,
     train_model,
     validate_clips,
+)
+from prototype_3_gestures.check import (
+    clip_status,
+    coverage_gaps,
+    find_skipped_dirs,
+    read_expected_labels,
 )
 from prototype_3_gestures.vsl3.features import (
     FEATURE_DIM,
@@ -616,6 +623,72 @@ class SegmentTrackerTests(unittest.TestCase):
         tracker.reset()
         self.assertIsNone(tracker.force_boundary())
         self.assertFalse(tracker.in_segment)
+
+
+class CheckToolTests(unittest.TestCase):
+    def test_reads_expected_labels_skipping_comments_and_blanks(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "labels.txt"
+            path.write_text(
+                "# danh sach nhan\nCảm ơn\n\n  Xin chào  \n# ghi chu\nTạm biệt\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(read_expected_labels(path), ["Cảm ơn", "Xin chào", "Tạm biệt"])
+
+    def test_duplicate_label_in_the_file_is_refused(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "labels.txt"
+            path.write_text("Cảm ơn\nXin chào\nCảm ơn\n", encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                read_expected_labels(path)
+            self.assertIn("Cảm ơn", str(ctx.exception))
+
+    def test_labels_are_normalised_so_nfd_and_nfc_are_the_same_label(self):
+        """macOS-style NFD filenames print identically to NFC but are a different string."""
+        nfd = unicodedata.normalize("NFD", "Cảm ơn")
+        self.assertNotEqual(nfd, "Cảm ơn")
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "labels.txt"
+            path.write_text(nfd + "\n" + "Xin chào\n", encoding="utf-8")
+            self.assertEqual(read_expected_labels(path)[0], "Cảm ơn")
+
+    def test_clip_status_separates_the_three_failure_causes(self):
+        self.assertEqual(clip_status(None, ValueError("Cannot open video: a.mov"), 0.5), "KHONG MO DUOC")
+        self.assertEqual(clip_status(None, ValueError("has too few readable frames (3)"), 0.5), "QUA NGAN")
+        self.assertEqual(clip_status(None, ValueError("detected hands in only 4.0%"), 0.5), "KHONG THAY TAY")
+        self.assertEqual(clip_status({"hand_frame_ratio": 0.41}, None, 0.5), "QUAY LAI")
+        self.assertEqual(clip_status({"hand_frame_ratio": 0.5}, None, 0.5), "ok")
+
+    def test_coverage_gaps_reports_missing_labels_and_short_counts(self):
+        clips = [
+            _clip("Cảm ơn", "P1", "1.mov"),
+            _clip("Cảm ơn", "P1", "2.mov"),
+            _clip("Xin chào", "P1", "1.mov"),
+        ]
+        gaps = coverage_gaps(clips, ["Cảm ơn", "Xin chào", "Mèo"], expected_per_label=2)
+
+        self.assertEqual(gaps["missing"], [("P1", "Mèo")])
+        self.assertEqual(gaps["short"], [("P1", "Xin chào", 1)])
+        self.assertEqual(gaps["unexpected"], [])
+
+    def test_coverage_gaps_flags_a_label_not_in_the_expected_list(self):
+        clips = [_clip("Mèo", "P1", "1.mov"), _clip("Mèo", "P1", "2.mov")]
+        gaps = coverage_gaps(clips, ["Cảm ơn"], expected_per_label=2)
+
+        self.assertEqual(gaps["unexpected"], ["Mèo"])
+        self.assertEqual(gaps["missing"], [("P1", "Cảm ơn")])
+
+    def test_flat_person_directory_holding_videos_is_reported_as_skipped(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "P1" / "Cảm ơn").mkdir(parents=True)
+            (root / "P1" / "Cảm ơn" / "Cảm ơn 01.mov").touch()
+            (root / "cam_on").mkdir()
+            (root / "cam_on" / "Cảm ơn 1.mov").touch()
+
+            skipped = find_skipped_dirs(root)
+
+        self.assertEqual([p.name for p in skipped], ["cam_on"])
 
 
 class RealtimeLogicTests(unittest.TestCase):
