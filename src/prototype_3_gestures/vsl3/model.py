@@ -95,11 +95,15 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> tup
             stacklevel=2,
         )
 
-    stored_features_version = config.get("features_version")
-    if stored_features_version is not None and int(stored_features_version) != FEATURES_VERSION:
+    # A checkpoint with no "features_version" key was written before the key existed, which means
+    # version 1 — treating the absence as "nothing to check" would skip the comparison for exactly
+    # the artifacts most likely to be stale.
+    stored_features_version = int(config.get("features_version", 1))
+    if stored_features_version != FEATURES_VERSION:
         warnings.warn(
-            f"{path} was trained on landmarks at FEATURES_VERSION={stored_features_version}, but this "
-            f"install extracts version {FEATURES_VERSION}. Predictions are unreliable until you retrain.",
+            f"{path} was trained on landmarks at FEATURES_VERSION={stored_features_version}"
+            f"{' (no key: assumed 1)' if 'features_version' not in config else ''}, but this install "
+            f"extracts version {FEATURES_VERSION}. Predictions are unreliable until you retrain.",
             stacklevel=2,
         )
 

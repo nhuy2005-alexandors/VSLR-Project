@@ -47,6 +47,13 @@ Bẫy đã gặp. Tích lũy, không xóa. Gặp bẫy mới → append.
 - **Vì sao dễ bỏ sót**: dùng chung một instance là cách viết tự nhiên nhất, và với **một** clip thì nó đúng. Lỗi chỉ xuất hiện từ clip thứ hai, và không có gì báo.
 - **Avoidance/fix**: `extract_video` mở instance MediaPipe **riêng cho mỗi video**; `process_frame` giữ instance dài hạn vì với camera thì mang state qua frame mới là đúng. Giá: 166 ms setup mỗi clip so với ~7 s inference → **+0%** wall clock (đo trên 6 clip: 41,76 s → 41,96 s). Bump `FEATURES_VERSION` lên 2 vì landmark đổi. Test `test_extract_video_is_not_contaminated_by_a_previous_video` dùng Holistic giả có state để khóa hành vi, và `test_live_camera_path_still_carries_state_between_frames` khóa chiều ngược lại.
 
+## Bump `FEATURES_VERSION` tạo ra đúng cái mismatch âm thầm mà nó tồn tại để chặn
+
+- **Symptom**: sau khi bump `FEATURES_VERSION` 1 → 2, load `models/gesture_lstm.pt` chỉ ra **một** cảnh báo (về `pooling`), không cảnh báo nào về landmark — dù checkpoint đó được train trên landmark v1 và extractor hiện tại sinh v2.
+- **Cause**: `load_checkpoint` viết `if stored is not None and stored != FEATURES_VERSION`. Checkpoint cũ **không có** khóa `features_version` (nó ra đời trước khóa đó), nên `stored is None` và phép so sánh bị bỏ qua hoàn toàn. Tức đúng những artifact dễ cũ nhất là những artifact được miễn kiểm.
+- **Avoidance/fix**: thiếu khóa nghĩa là "viết trước khi có khóa" = **version 1**, không phải "không cần kiểm". `int(config.get("features_version", 1))`. Cùng logic với `pooling` thiếu → `legacy_last_step`. Test `test_checkpoint_without_features_version_is_treated_as_version_one` khóa hành vi.
+- **Bài học rộng hơn**: mỗi lần thêm một khóa metadata để phát hiện lệch, phải quyết **giá trị mặc định cho artifact chưa có khóa đó** ngay trong cùng lần sửa. Mặc định `None` + `is not None` là cách tự vô hiệu hóa cái guard vừa viết.
+
 ## Benchmark trên CPU chưa nguội cho số sai gấp 2–3 lần
 
 - **Symptom**: cùng một hàm `augment_sequence`, ba lần đo ra 0,638 / 1,419 / 1,453 ms/mẫu. Chọn số nào cũng "có receipt" mà kết luận khác nhau hẳn.

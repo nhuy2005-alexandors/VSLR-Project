@@ -33,7 +33,7 @@ from prototype_3_gestures.vsl3.features import (
     resample_sequence,
     time_warp_sequence,
 )
-from prototype_3_gestures.vsl3.model import GestureLSTM
+from prototype_3_gestures.vsl3.model import GestureLSTM, load_checkpoint, save_checkpoint
 from prototype_3_gestures.realtime import SegmentTracker, should_accept_prediction
 
 
@@ -206,6 +206,26 @@ class ModelTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(pooled, torch.cat([h_n[0], h_n[1]], dim=1), atol=1e-6))
         self.assertFalse(torch.allclose(out[:, -1, 5:], h_n[1], atol=1e-6))
+
+    def test_checkpoint_without_features_version_is_treated_as_version_one(self):
+        """A missing key means "written before the key existed", i.e. v1 — not "no need to check".
+
+        Skipping the check for keyless checkpoints is exactly the silent landmark mismatch that
+        FEATURES_VERSION exists to catch.
+        """
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "legacy.pt"
+            model = GestureLSTM(FEATURE_DIM, 3, pooling="legacy_last_step")
+            save_checkpoint(path, model, ["a", "b", "c"], {"input_dim": FEATURE_DIM, "pooling": "legacy_last_step"})
+
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                load_checkpoint(path)
+
+            messages = " ".join(str(w.message) for w in caught)
+            if FEATURES_VERSION != 1:
+                self.assertIn("FEATURES_VERSION", messages)
+                self.assertIn("retrain", messages.lower())
 
     def test_legacy_pooling_stays_reproducible_for_old_checkpoints(self):
         model = GestureLSTM(FEATURE_DIM, 3, hidden_size=4, pooling="legacy_last_step")
