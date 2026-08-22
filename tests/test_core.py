@@ -41,7 +41,7 @@ from prototype_3_gestures.vsl3.features import (
     time_warp_sequence,
 )
 from prototype_3_gestures.vsl3.model import GestureLSTM, load_checkpoint, save_checkpoint
-from prototype_3_gestures.realtime import SegmentTracker, should_accept_prediction
+from prototype_3_gestures.realtime import Segment, SegmentTracker, should_accept_prediction
 
 
 def _clip(label: str, person: str, name: str = "a.mov") -> Clip:
@@ -519,7 +519,12 @@ class ArgumentTests(unittest.TestCase):
 
 
 class SegmentTrackerTests(unittest.TestCase):
-    """The boundary rules used to live inline in realtime.main(), untestable without a camera."""
+    """The boundary rules used to live inline in realtime.main(), untestable without a camera.
+
+    Thresholds are DURATIONS, not frame counts: the same physical gesture reaches the tracker at
+    ~60 fps from a video file and ~20 fps from the live camera on this machine, so a frame-count cap
+    encoded two different real-world limits.
+    """
 
     def _feed(self, tracker, script):
         """script: list of (hands_present, now). Returns every segment the tracker completed."""
@@ -530,98 +535,106 @@ class SegmentTrackerTests(unittest.TestCase):
                 segments.append(done)
         return segments
 
-    def test_cap_reached_after_hands_are_down_does_not_swallow_the_next_word(self):
-        """awaiting_hand_drop only makes sense when the cap hit while the hands were still up.
+    def _hands_up(self, seconds, fps, start=0.0):
+        dt = 1.0 / fps
+        return [(True, start + i * dt) for i in range(int(round(seconds * fps)))]
 
-        If the cap is reached inside the no-hand tail the hands are already down, so the next
-        gesture must be allowed to start immediately instead of being dropped.
-        """
-        tracker = SegmentTracker(word_gap=0.45, max_frames=5)
-        script = [(True, 0.0), (True, 0.05), (True, 0.10)]      # 3 frames
-        script += [(False, 0.15), (False, 0.20)]                 # tail fills to 5 -> cap closes it
-        script += [(True, 0.25 + i * 0.05) for i in range(5)]    # next gesture, back up quickly
+    def _hands_down(self, seconds, fps, start):
+        dt = 1.0 / fps
+        return [(False, start + i * dt) for i in range(int(round(seconds * fps)))]
+
+    def test_cap_is_the_same_duration_at_any_frame_rate(self):
+        """A frame-count cap made an 8 s gesture get cut at 60 fps and left whole at 20 fps."""
+        for fps in (60.0, 20.0):
+            tracker = SegmentTracker(word_gap=0.45, max_seconds=5.0)
+            script = self._hands_up(8.0, fps) + self._hands_down(1.0, fps, start=8.0)
+
+            segments = self._feed(tracker, script)
+
+            self.assertEqual(len(segments), 1, f"fps={fps}")
+            self.assertTrue(segments[0].forced, f"fps={fps}: the cap must have closed it")
+            self.assertAlmostEqual(segments[0].duration, 5.0, delta=2.0 / fps, msg=f"fps={fps}")
+
+    def test_gesture_shorter_than_the_cap_is_never_forced(self):
+        for fps in (60.0, 20.0):
+            tracker = SegmentTracker(word_gap=0.45, max_seconds=5.0)
+            script = self._hands_up(2.5, fps) + self._hands_down(1.0, fps, start=2.5)
+
+            segments = self._feed(tracker, script)
+
+            self.assertEqual(len(segments), 1, f"fps={fps}")
+            self.assertFalse(segments[0].forced, f"fps={fps}")
+            self.assertAlmostEqual(segments[0].duration, 2.5, delta=0.5, msg=f"fps={fps}")
+
+    def test_slow_gesture_does_not_become_two_words(self):
+        """After a forced cut the rest of the gesture is discarded, not turned into a second word."""
+        tracker = SegmentTracker(word_gap=0.45, max_seconds=1.0)
+        script = self._hands_up(2.5, 30.0) + self._hands_down(1.0, 30.0, start=2.5)
 
         segments = self._feed(tracker, script)
 
-        # The second gesture also ends on the cap, this time with the hands still up, so the flag
-        # is legitimately set at the end — what matters is that the second word was not swallowed.
+        self.assertEqual(len(segments), 1)
+        self.assertTrue(segments[0].forced)
+
+    def test_new_gesture_starts_only_after_hands_drop(self):
+        tracker = SegmentTracker(word_gap=0.45, max_seconds=1.0)
+        script = self._hands_up(1.5, 30.0)
+        script += self._hands_down(1.0, 30.0, start=1.5)
+        script += self._hands_up(0.5, 30.0, start=2.6)
+        script += self._hands_down(1.0, 30.0, start=3.2)
+
+        segments = self._feed(tracker, script)
+
         self.assertEqual(len(segments), 2)
-        self.assertEqual([len(s) for s in segments], [5, 5])
+        self.assertTrue(segments[0].forced)
+        self.assertFalse(segments[1].forced)
 
     def test_one_dropped_detection_frame_does_not_reopen_the_segment(self):
-        """A single no-hand frame is noise everywhere else in this state machine, so it must not
-        be enough to clear awaiting_hand_drop either.
-
-        The close path below tolerates no-hand runs shorter than word_gap; clearing the flag on the
-        first no-hand frame used a different rule for the same signal, so one frame of motion blur
-        mid-gesture let the next frame open a second word.
-        """
-        tracker = SegmentTracker(word_gap=0.45, max_frames=10)
+        """A single no-hand frame is noise everywhere else in this machine, so it must not clear
+        awaiting_hand_drop either — one frame of motion blur used to start a second word."""
+        tracker = SegmentTracker(word_gap=0.45, max_seconds=0.5)
         dt = 1.0 / 30.0
-        script = [(True, i * dt) for i in range(20)]
-        script += [(False, 20 * dt)]                                  # one dropped detection
-        script += [(True, i * dt) for i in range(21, 40)]              # hands never actually came down
+        script = self._hands_up(0.7, 30.0)
+        script += [(False, 21 * dt)]
+        script += [(True, (22 + i) * dt) for i in range(20)]
 
         segments = self._feed(tracker, script)
 
         self.assertEqual(len(segments), 1, "a detection blink is not the hands coming down")
 
-    def test_no_hand_tail_cannot_push_a_segment_past_max_frames(self):
-        """--max-frames is documented as a hard cap, so the tail branch has to honour it too."""
-        tracker = SegmentTracker(word_gap=3.0, max_frames=10)
-        script = [(True, i * 0.01) for i in range(5)] + [(False, 0.05 + i * 0.01) for i in range(200)]
-
-        segments = self._feed(tracker, script)
-
-        self.assertTrue(segments, "the segment must close")
-        self.assertLessEqual(max(len(s) for s in segments), 10)
-
-    def test_slow_gesture_does_not_become_two_words(self):
-        """Hitting --max-frames must not reopen a segment while the hands are still up.
-
-        The old loop set in_segment = False on the forced commit, so the very next frame — hands
-        still raised, mid-gesture — started a new word. One slow gesture became two.
-        """
-        tracker = SegmentTracker(word_gap=0.45, max_frames=10)
-        script = [(True, i * 0.1) for i in range(25)] + [(False, 2.5 + i * 0.1) for i in range(10)]
-
-        segments = self._feed(tracker, script)
-
-        self.assertEqual(len(segments), 1, "one continuous gesture must yield exactly one segment")
-        self.assertEqual(len(segments[0]), 10)
-
-    def test_new_gesture_starts_only_after_hands_drop(self):
-        tracker = SegmentTracker(word_gap=0.45, max_frames=10)
-        script = (
-            [(True, i * 0.1) for i in range(15)]          # forced cut at frame 10, rest ignored
-            + [(False, 1.5 + i * 0.1) for i in range(10)]  # hands down past word_gap
-            + [(True, 2.6 + i * 0.1) for i in range(10)]   # a genuinely new gesture
-            + [(False, 3.7 + i * 0.1) for i in range(10)]
-        )
-
-        segments = self._feed(tracker, script)
-
-        self.assertEqual(len(segments), 2)
-
     def test_word_gap_closes_a_segment_and_short_blips_do_not(self):
-        tracker = SegmentTracker(word_gap=0.45, max_frames=150)
+        tracker = SegmentTracker(word_gap=0.45, max_seconds=60.0)
         blip = [(True, 0.0), (True, 0.1), (True, 0.2), (False, 0.3), (True, 0.4), (True, 0.5)]
         self.assertEqual(self._feed(tracker, blip), [], "a gap under word_gap must not split")
 
         segments = self._feed(tracker, [(False, 0.6), (False, 1.2)])
         self.assertEqual(len(segments), 1)
-        self.assertEqual(len(segments[0]), 7, "frames inside the sub-gap stay in the segment")
+        self.assertEqual(len(segments[0].features), 7, "frames inside the sub-gap stay in the segment")
+        self.assertFalse(segments[0].forced)
+
+    def test_cap_reached_after_hands_are_down_does_not_swallow_the_next_word(self):
+        """The cap can be crossed inside the no-hand tail, where the hands are already down, so the
+        next gesture must be allowed to start immediately."""
+        tracker = SegmentTracker(word_gap=3.0, max_seconds=0.2)
+        script = [(True, 0.0), (True, 0.05), (True, 0.10)]
+        script += [(False, 0.15), (False, 0.25)]
+        script += [(True, 0.30 + i * 0.05) for i in range(6)]
+
+        segments = self._feed(tracker, script)
+
+        self.assertEqual(len(segments), 2)
+        self.assertFalse(segments[0].forced, "hands were already down when the cap was crossed")
 
     def test_force_boundary_and_reset(self):
-        tracker = SegmentTracker(word_gap=0.45, max_frames=150)
-        self._feed(tracker, [(True, i * 0.1) for i in range(5)])
-        forced = tracker.force_boundary()
-        self.assertEqual(len(forced), 5)
-        self.assertIsNone(tracker.force_boundary(), "nothing open, nothing to force")
+        tracker = SegmentTracker(word_gap=0.45, max_seconds=60.0)
+        self._feed(tracker, self._hands_up(0.5, 10.0))
+        forced = tracker.force_boundary(now=0.5)
+        self.assertEqual(len(forced.features), 5)
+        self.assertIsNone(tracker.force_boundary(now=0.6), "nothing open, nothing to force")
 
         self._feed(tracker, [(True, 1.0), (True, 1.1)])
         tracker.reset()
-        self.assertIsNone(tracker.force_boundary())
+        self.assertIsNone(tracker.force_boundary(now=1.2))
         self.assertFalse(tracker.in_segment)
 
 

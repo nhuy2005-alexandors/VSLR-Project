@@ -7,8 +7,8 @@ _Cập nhật: 2026-08-22_
 - **Pipeline feature**: `src/prototype_3_gestures/vsl3/features.py` — MediaPipe Holistic, 67 landmark (25 pose + 21×2 hand) × 3 = `FEATURE_DIM` 201, resample `SEQUENCE_LENGTH` 60, normalize theo trung điểm vai, augment không mirroring. Thêm `FEATURES_VERSION = 1` dùng làm khóa cache.
 - **Model**: `src/prototype_3_gestures/vsl3/model.py` — `GestureLSTM` (BiLSTM, 242.581 tham số ở 3 nhãn). **Sửa pooling**: `out[:, -1, :]` → `cat([out[:, -1, :h], out[:, 0, h:]])`; trước đó một nửa biểu diễn chỉ là hàm của một frame. Checkpoint thiếu khóa `pooling` mặc định về `legacy_last_step` nên artifact cũ vẫn chạy đúng như lúc train.
 - **Train CLI tái cấu trúc**: `prepare_train.py` — `Clip(label, person, path)`, `discover_clips` quét `DIR/<person>/<gesture>/`, cache landmark per-clip, `GestureDataset` augment on-the-fly, `signer_split` theo NGƯỜI. Hai chế độ: `--loso` chỉ đo, mặc định chỉ sản xuất. Xóa `build_dataset`, `source_holdout_split`, `best_state`/`best_epoch`/`final_fit_epochs`, khối refit.
-- **Tests**: `tests/test_core.py` — **43 test**, chạy `python -m pytest` ngày 2026-08-22: **43 passed**. Mutation testing: 7/7 trên pipeline + 5/5 trên `SegmentTracker` đều bị bắt.
-- **Realtime đã sửa**: `SegmentTracker` tách khỏi `main()`, cờ `awaiting_hand_drop` chặn bug một cử chỉ ra hai từ, `--max-frames` 150 → 300. As-built: `docs/technical_specs/realtime-segmentation.md`.
+- **Tests**: `tests/test_core.py` — **44 test**, chạy `python -m pytest` ngày 2026-08-22: **44 passed**. Mutation testing: 7/7 trên pipeline + 5/5 trên `SegmentTracker` đều bị bắt.
+- **Realtime đã sửa**: `SegmentTracker` tách khỏi `main()`, cờ `awaiting_hand_drop` chặn bug một cử chỉ ra hai từ. Ngưỡng đổi từ frame sang **giây** (`--max-seconds` 5,0 / `--min-seconds` 0,35) vì file 60 fps và webcam ~21 fps làm ngưỡng frame mang hai nghĩa khác nhau. As-built: `docs/technical_specs/realtime-segmentation.md`.
 - **Augment thêm time warp**: `time_warp_sequence` bẻ nhịp bên trong cử chỉ (`t → t + w·sin(πt)`). Time stretch toàn cục là no-op vì `extract_video` đã chuẩn hóa thời lượng — xem ADR-006.
 - **Docs**: spec `docs/specs/pipeline-restructure.md` (rev 2 sau `spec-critic`: BLOCKED → 5 blocker đã trả lời), as-built `docs/technical_specs/pipeline-restructure.md`, ADR-003/004/005, 4 gotcha mới.
 - **Vòng `reviewer` xong**: verdict BLOCKED → 2 blocker + 6 should-fix + nits, **đã xử lý hết**. Reviewer xác nhận không có đường leakage, pooling đúng khi đối chiếu `h_n`, mode tách đúng. Hai blocker đều ở nhánh xử lý lỗi: nhãn mất hết clip biến khỏi class set, và cache hỏng bị tính là clip quay tệ. Bảng đầy đủ trong as-built doc.
@@ -37,7 +37,7 @@ _Cập nhật: 2026-08-22_
 
 ```powershell
 $env:PYTHONIOENCODING="utf-8"
-python -m pytest                                      # 43 passed
+python -m pytest                                      # 44 passed
 vslr-train --data-dir <cây P1..Pn> --loso --num-workers 4   # đo; ghi models/loso_report.json
 vslr-camera --no-tts                                  # camera, chưa phát giọng
 ```

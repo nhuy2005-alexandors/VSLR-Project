@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -69,24 +70,44 @@ def should_accept_prediction(confidence: float, threshold: float) -> bool:
     return confidence >= threshold
 
 
+@dataclass(frozen=True)
+class Segment:
+    """One completed gesture: the frames, when it ran, and whether the cap cut it short."""
+
+    features: list[np.ndarray]
+    start_time: float
+    end_time: float
+    forced: bool
+
+    @property
+    def duration(self) -> float:
+        return self.end_time - self.start_time
+
+
 class SegmentTracker:
     """Decides where one gesture ends inside a continuous frame stream.
 
     A pure state machine — no model, no camera — so the boundary rules are testable. Feed it one
-    frame at a time; it returns a completed segment or None.
+    frame at a time; it returns a completed `Segment` or None.
+
+    Thresholds are DURATIONS, not frame counts. The same gesture reaches this class at ~60 fps from
+    a video file and at MediaPipe's throughput (~20 fps measured) from the live camera, so a
+    frame-count cap silently encoded two different real-world limits — 300 frames was 5 s offline
+    and 14 s on the webcam.
     """
 
-    def __init__(self, word_gap: float, max_frames: int):
+    def __init__(self, word_gap: float, max_seconds: float):
         self.word_gap = word_gap
-        self.max_frames = max_frames
+        self.max_seconds = max_seconds
         self.segment: list[np.ndarray] = []
         self.in_segment = False
+        self.start_time = 0.0
         self.last_hand_time = 0.0
-        # Set when max_frames forces a cut while the hands are still raised. Without it the very
+        # Set when max_seconds forces a cut while the hands are still raised. Without it the very
         # next frame reopened a segment mid-gesture, so one slow gesture came out as two words.
         self.awaiting_hand_drop = False
 
-    def feed(self, hands_present: bool, features: np.ndarray, now: float) -> list[np.ndarray] | None:
+    def feed(self, hands_present: bool, features: np.ndarray, now: float) -> Segment | None:
         if hands_present:
             self.last_hand_time = now
             if self.awaiting_hand_drop:
@@ -94,7 +115,8 @@ class SegmentTracker:
             if not self.in_segment:
                 self.segment = []
                 self.in_segment = True
-            return self._append(features, forced_by_cap=True)
+                self.start_time = now
+            return self._append(features, now, hands_up=True)
 
         if self.awaiting_hand_drop:
             # Same hysteresis the close path below uses. Clearing on the first no-hand frame
@@ -107,29 +129,30 @@ class SegmentTracker:
         if not self.in_segment:
             return None
         if now - self.last_hand_time < self.word_gap:
-            return self._append(features, forced_by_cap=False)
-        return self._close()
+            return self._append(features, now, hands_up=False)
+        return self._close(now, forced=False)
 
-    def force_boundary(self) -> list[np.ndarray] | None:
-        return self._close() if self.in_segment else None
+    def force_boundary(self, now: float) -> Segment | None:
+        return self._close(now, forced=False) if self.in_segment else None
 
     def reset(self) -> None:
         self.segment = []
         self.in_segment = False
         self.awaiting_hand_drop = False
 
-    def _append(self, features: np.ndarray, forced_by_cap: bool) -> list[np.ndarray] | None:
-        """Single place that grows a segment, so max_frames is a cap on every path into it."""
+    def _append(self, features: np.ndarray, now: float, hands_up: bool) -> Segment | None:
+        """Single place that grows a segment, so max_seconds caps every path into it."""
         self.segment.append(features)
-        if len(self.segment) >= self.max_frames:
-            # Only wait for a hand-drop if the hands were actually still up when the cap hit.
-            self.awaiting_hand_drop = forced_by_cap
-            return self._close()
+        if now - self.start_time >= self.max_seconds:
+            # Only wait for a hand-drop if the hands were actually still up when the cap hit;
+            # otherwise the next word would be swallowed.
+            self.awaiting_hand_drop = hands_up
+            return self._close(now, forced=hands_up)
         return None
 
-    def _close(self) -> list[np.ndarray]:
+    def _close(self, now: float, forced: bool) -> Segment:
         done, self.segment, self.in_segment = self.segment, [], False
-        return done
+        return Segment(features=done, start_time=self.start_time, end_time=now, forced=forced)
 
 
 def main() -> None:
@@ -139,14 +162,20 @@ def main() -> None:
     parser.add_argument("--confidence", type=float, default=0.72)
     parser.add_argument("--word-gap", type=float, default=0.45, help="No-hand gap that ends one gesture")
     parser.add_argument("--sentence-gap", type=float, default=2.2, help="Additional idle time before speaking")
-    parser.add_argument("--min-frames", type=int, default=8)
     parser.add_argument(
-        "--max-frames",
-        type=int,
-        default=300,
-        help="Hard cap on frames in one gesture. On hitting it the segment is classified and the "
-        "rest of that gesture is discarded until the hands come down, so keep it above the "
-        "slowest gesture you intend to sign.",
+        "--min-seconds",
+        type=float,
+        default=0.35,
+        help="Segments shorter than this are dropped without classifying. In seconds, not frames, "
+        "so it means the same thing on a 60 fps file and on a ~20 fps webcam.",
+    )
+    parser.add_argument(
+        "--max-seconds",
+        type=float,
+        default=5.0,
+        help="Hard cap on one gesture. On hitting it the segment is classified and the rest of "
+        "that gesture is discarded until the hands come down, so keep it above the slowest "
+        "gesture you intend to sign.",
     )
     parser.add_argument("--no-tts", action="store_true")
     args = parser.parse_args()
@@ -155,11 +184,11 @@ def main() -> None:
     for name, value in (("--word-gap", args.word_gap), ("--sentence-gap", args.sentence_gap)):
         if value <= 0.0:
             parser.error(f"{name} must be > 0, got {value}")
-    if args.min_frames < 1:
-        parser.error(f"--min-frames must be >= 1, got {args.min_frames}")
-    if args.max_frames < args.min_frames:
+    if args.min_seconds <= 0.0:
+        parser.error(f"--min-seconds must be > 0, got {args.min_seconds}")
+    if args.max_seconds < args.min_seconds:
         parser.error(
-            f"--max-frames ({args.max_frames}) must be >= --min-frames ({args.min_frames}); "
+            f"--max-seconds ({args.max_seconds}) must be >= --min-seconds ({args.min_seconds}); "
             "otherwise every segment is dropped and the demo silently recognises nothing."
         )
 
@@ -178,16 +207,16 @@ def main() -> None:
         raise RuntimeError(f"Cannot open camera {args.camera}")
 
     sentence: list[str] = []
-    tracker = SegmentTracker(args.word_gap, args.max_frames)
+    tracker = SegmentTracker(args.word_gap, args.max_seconds)
     last_sentence_activity = time.monotonic()
 
-    def handle_segment(segment: list[np.ndarray] | None) -> None:
+    def handle_segment(segment: Segment | None) -> None:
         if segment is None:
             return
         nonlocal last_sentence_activity
-        if len(segment) < args.min_frames:
+        if segment.duration < args.min_seconds:
             return
-        label, confidence = classify_segment(model, labels, device, segment, seq_len)
+        label, confidence = classify_segment(model, labels, device, segment.features, seq_len)
         if should_accept_prediction(confidence, args.confidence):
             sentence.append(label)
             print(f"WORD> {label} ({confidence:.1%}) | sentence: {' '.join(sentence)}")
@@ -217,10 +246,10 @@ def main() -> None:
                     last_sentence_activity = now
 
                 done = tracker.feed(obs.hands_present, obs.features, now)
-                if done is not None and tracker.awaiting_hand_drop:
+                if done is not None and done.forced:
                     print(
-                        f"Segment hit --max-frames ({args.max_frames}); classifying it and waiting for "
-                        "the hands to come down before starting the next word."
+                        f"Segment hit --max-seconds ({args.max_seconds}); classifying it and waiting "
+                        "for the hands to come down before starting the next word."
                     )
                 handle_segment(done)
 
@@ -249,7 +278,7 @@ def main() -> None:
                 elif key == ord("s") and sentence:
                     speak_sentence(now)
                 elif key == 32:
-                    handle_segment(tracker.force_boundary())
+                    handle_segment(tracker.force_boundary(now))
     finally:
         cap.release()
         cv2.destroyAllWindows()

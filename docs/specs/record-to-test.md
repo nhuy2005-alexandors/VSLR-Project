@@ -8,7 +8,7 @@ _Viết: 2026-08-22. **Trạng thái: rev 1, `spec-critic` trả BLOCKED — CH�
 |---|---|
 | `vslr-check` gọi `validate_clips` sẽ abort giữa buổi quay: quay theo vòng nên sau vòng 1 mọi nhãn có đúng 1 clip, mà `validate_clips` đòi ≥ 2. Và "cặp còn thiếu" luôn rỗng vì tập nhãn được suy **từ chính cây** | `vslr-check` **không gọi `validate_clips`** — nó là công cụ báo cáo, không phải cổng. Tập nhãn mong đợi đến từ **file `dataset/labels.txt`**, không suy từ cây. Đó cũng chính là thứ dự án đang thiếu: một danh sách nhãn viết ra giấy |
 | `--expect-from-filename` xuất hiện ở khối "Định nghĩa xong" mà Requirements không định nghĩa, và `cau_01.mov` không mang được nội dung câu | Xóa cờ đó. Ground truth vào manifest `dataset/raw_sentences/sentences.csv` (`person,clip,words`), điền lúc quay |
-| Đồng hồ offline ≠ đồng hồ demo. `--word-gap`/`--sentence-gap` tính bằng giây nên chuyển được; `--max-frames`/`--min-frames` đếm frame nên **không** | Đổi hai cờ đó sang **giây**. Đo được: clip 59,96 fps, MediaPipe 19,5–21,5 fps trên máy này → `--max-frames 300` là 5,0 giây offline nhưng 14,0 giây trên webcam. Nguyên mẫu xác nhận ngưỡng giây làm hai đường trùng hành vi |
+| Đồng hồ offline ≠ đồng hồ demo. `--word-gap`/`--sentence-gap` tính bằng giây nên chuyển được; `--max-frames`/`--min-frames` đếm frame nên **không** | **ĐÃ LÀM**: hai cờ đó giờ là `--max-seconds` / `--min-seconds`. Đo được: clip 59,96 fps, MediaPipe 19,5–21,5 fps trên máy này → `--max-frames 300` là 5,0 giây offline nhưng 14,0 giây trên webcam. Nguyên mẫu xác nhận ngưỡng giây làm hai đường trùng hành vi |
 | "dùng lại `SegmentTracker`" và "không refactor `realtime.main()`" không cùng đúng được: lọc `min_frames`, ngưỡng confidence, ghép câu đều là closure trong `main()` | Kéo phần đó ra. **Refactor `realtime.main()` vào scope.** Một bản duy nhất có thẩm quyền |
 | `predictions[]` đưa qua đâu: nhét vào history → 21.600 dòng + vỡ 2 test; trả 3-tuple → vỡ 3 chỗ unpack; evaluate lần hai → val loader dựng hai nơi | Gọi **evaluate lần hai** trong `main()`, tách phần dựng val loader thành helper dùng chung. `train_model` giữ 2-tuple → không test nào vỡ. `confidence` = **softmax-max**, khớp `predict_sequence` |
 
@@ -74,7 +74,7 @@ Tức phần được đo và phần được demo là hai thứ khác nhau — 
 
 - [ ] Entry point mới → `prototype_3_gestures.sentence:main`.
 - [ ] Đọc video bằng `HolisticExtractor.process_frame` từng frame, dựng `now` từ số frame và FPS của file (không dùng `time.monotonic` — đây là offline, phải tái lập được).
-- [ ] Đưa qua **chính** `SegmentTracker` mà `realtime.py` dùng, cùng `--word-gap` / `--max-frames` / `--min-frames`, rồi `classify_segment` + `should_accept_prediction`. Không được nhân bản logic.
+- [ ] Đưa qua **chính** `SegmentTracker` mà `realtime.py` dùng, cùng `--word-gap` / `--max-seconds` / `--min-seconds`, rồi `classify_segment` + `should_accept_prediction`. Không được nhân bản logic.
 - [ ] In từng segment: `frame bắt đầu–kết thúc | nhãn | confidence | nhận/loại`, rồi câu ghép cuối.
 - [ ] `--expect` cho danh sách từ mong đợi → in khớp/lệch và exit 1 nếu lệch. Đây là thứ biến demo thành test.
 - [ ] `--dir DIR` chạy cả thư mục clip câu và in tổng: bao nhiêu câu đúng hoàn toàn, bao nhiêu sai một từ, bao nhiêu sai số lượng từ.

@@ -73,6 +73,14 @@ Hai đầu bị ghim nên vị trí bắt đầu/kết thúc không đổi; đơ
 
 Audit tìm ra một lỗi trong pipeline **đã commit** trước đó: landmark của một clip phụ thuộc clip nào được extract trước nó, lệch tới 1,99 độ-rộng-vai. Chi tiết và cách sửa trong `docs/GOTCHAS.md`; `FEATURES_VERSION` lên 2.
 
+## Ngưỡng đổi từ frame sang giây
+
+`--max-frames`/`--min-frames` đã thành `--max-seconds` (5,0) / `--min-seconds` (0,35), và `SegmentTracker.feed` trả về một `Segment` mang `start_time`/`end_time`/`forced` thay vì một list trần.
+
+Lý do đo được: clip trong `dataset/raw` là 59,96 fps, còn MediaPipe trên máy này chạy 19,5–21,5 fps (46,6 ms/frame ở 1080p). Nên `--max-frames 300` là **5,0 giây** khi đọc file nhưng **14,0 giây** trên webcam. Nguyên mẫu đo cùng một cử chỉ 8 giây ở hai nhịp frame: ngưỡng frame cắt ở 60 fps mà **không** cắt ở 21,5 fps; ngưỡng giây cắt đúng 5,0 giây ở cả hai. Test `test_cap_is_the_same_duration_at_any_frame_rate` khóa điều đó.
+
+Quan trọng cho bước sau: không có việc này thì `vslr-sentence` (đo ghép câu từ file) không thể tái lập hành vi demo.
+
 ## File đã đổi
 
 | File | Đổi gì |
@@ -100,6 +108,6 @@ vslr-camera --no-tts      # can camera, chua chay duoc trong moi truong nay
 
 ## Watch-outs
 
-- Sau cắt cưỡng bức ở `--max-frames`, đuôi cử chỉ **bị bỏ**. Nếu demo thấy cử chỉ chậm bị nhận sai, tăng `--max-frames` trước khi nghi model.
+- Sau cắt cưỡng bức ở `--max-seconds`, đuôi cử chỉ **bị bỏ**. Nếu demo thấy cử chỉ chậm bị nhận sai, tăng `--max-seconds` trước khi nghi model.
 - Phân phối augment đã đổi (thêm warp), nên số đo trước và sau thay đổi này không so sánh trực tiếp được.
 - `--word-gap` vẫn nối frame tay hạ vào đuôi segment — lệch với lúc train, xem mục "Giữ nguyên có chủ ý".
