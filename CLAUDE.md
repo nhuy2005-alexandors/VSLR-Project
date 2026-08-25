@@ -15,13 +15,14 @@ Python >= 3.11, setuptools + pytest, PyTorch, MediaPipe 0.10.21, OpenCV 4.11.
 | Train | `vslr-train --data-dir dataset/raw` — train mọi clip, **không holdout, không kèm accuracy** |
 | Đo accuracy | `vslr-train --data-dir dataset/raw --loso` — ghi `models/loso_report.json`, **không** ghi checkpoint |
 | Train một người | `vslr-train --video "Nhãn=path.mov" ...` (≥ 2 clip mỗi nhãn; `--loso` bị từ chối vì không có ID người) |
-| Camera | `vslr-camera --no-tts` (thêm TTS: bỏ cờ) |
+| Camera | `vslr-camera --no-tts` — checkpoint lệch `FEATURES_VERSION` bị chặn; chỉ dùng `--allow-incompatible-model` cho demo legacy tạm thời |
 
-In nhãn tiếng Việt ra console Windows: đặt `PYTHONIOENCODING=utf-8` trước, không thì `UnicodeEncodeError` (xem `docs/GOTCHAS.md`).
+Ba CLI tự cấu hình stdout/stderr UTF-8 trên Windows; không cần đặt `PYTHONIOENCODING` thủ công.
 
 ## Kỷ luật số liệu (quan trọng với project này)
 
 - Không bao giờ báo accuracy mà không đối chiếu `extraction[].video` trong `models/metrics.json` với danh sách clip test — repo này đã một lần train trên chính clip test (`docs/GOTCHAS.md`).
+- Chỉ ghép accuracy khi `training_signature` khớp trong cả `loso_report.json`, `metrics.json` và config bên trong `gesture_lstm.pt`; `metrics.json.checkpoint_sha256` phải khớp đúng file weights. Hash gồm data/nhãn, hyperparameter, model/augment/training recipe, device và runtime; `num_workers` cố ý không ảnh hưởng.
 - Docs assert số → cross-check với artifact thật. Lệch thì báo user, không im lặng.
 - Không weaken test/assertion/ngưỡng để lấy màu xanh.
 
@@ -48,9 +49,9 @@ Prompt cho sub phải self-contained (path, dòng, spec, kết quả mong đợi
 
 | Path | Nội dung | Git |
 |---|---|---|
-| `dataset/labels.txt` | **nguồn sự thật duy nhất** cho tập nhãn; `vslr-check` đọc nó để biết còn thiếu nhãn nào (cây không nói được) | tracked |
+| `dataset/labels.txt` | **nguồn sự thật duy nhất** cho tập nhãn; cả `vslr-check` và `vslr-train --data-dir` bắt cây khớp manifest trước khi extract | tracked |
 | `dataset/raw/` | 27 clip train (1–9 mỗi nhãn); tên file **không** mã hóa người ký nên chỉ chạy được chế độ một-người | tracked |
-| `dataset/processed/landmark_cache/` | cache landmark `.npz` mỗi clip, khóa theo `(path, mtime, FEATURES_VERSION)` — xóa được, tự sinh lại | ignored |
+| `dataset/processed/landmark_cache/` | cache landmark `.npz` mỗi clip, khóa theo SHA-256 bytes nguồn + path/mtime + feature contract — xóa được, tự sinh lại | ignored |
 | `dataset/legacy/` | bộ từ điển VSL crawl từ bên thứ ba: `Videos/` 4362 `.mp4`, `Text/label_all.csv` 3315 nhãn (~1,5 clip/nhãn) | ignored |
 | `models/` | `gesture_lstm.pt`, `labels.json`, `metrics.json` | tracked |
 | `models/backups/` | snapshot lần train cũ (có 1 npz 106 MB) | untracked |

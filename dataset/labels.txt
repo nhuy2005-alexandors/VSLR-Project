@@ -1,65 +1,35 @@
-# Danh sách nhãn cử chỉ sẽ quay — MỘT NHÃN MỖI DÒNG
-#
-# File này là NGUỒN SỰ THẬT DUY NHẤT cho tập nhãn. `vslr-check` đọc nó để biết
-# còn thiếu cặp (người, nhãn) nào — nhãn chưa ai quay thì KHÔNG có trong cây thư
-# mục, nên cây không bao giờ tự nói được là còn thiếu gì.
-#
-# Tên ở đây phải khớp CHÍNH XÁC tên thư mục cử chỉ:
-#     dataset/raw/P1/Cảm ơn/Cảm ơn 01.mov
-# và nó đi thẳng vào models/labels.json rồi vào câu TTS đọc ra. Nên phải là tiếng
-# Việt có dấu, không phải slug `cam_on`.
-#
-# ============================ CHƯA CHỐT ============================
-# Bên dưới là ĐỀ XUẤT, không phải quyết định. Ba việc phải làm trước khi quay:
-#
-# 1. Bỏ hoặc gộp mọi nhãn là ĐOẠN CON của nhãn khác. Cặp lồng nhau không phải
-#    khó — nó không có lời giải: cùng một lần múa sẽ ra nhãn ngắn hay nhãn dài
-#    tùy chỗ người ta dừng tay.
-#
-# 2. Ba câu cần người thạo VSL trả lời:
-#      - `Đi đâu` là một dấu riêng, hay là `đi` + `Ở đâu` múa liền?
-#      - `Khỏe không` là một dấu, hay `khỏe` rồi nét hỏi?
-#      - `Sao thế` với `Chuyện gì` là hai dấu khác nhau, hay một dấu hai cách dịch?
-#    Sai một câu là hai nhãn không bao giờ tách được, dù quay bao nhiêu clip.
-#
-# 3. Kiểm trật tự cú pháp: realtime ghép câu bằng `" ".join` theo đúng thứ tự
-#    múa. Nếu trật tự VSL khác trật tự tiếng Việt thì chuỗi ghép ra sẽ không
-#    phải câu tiếng Việt đúng ngữ pháp.
-# ===================================================================
+# VSLR dataset V1 — 30 nhãn đã chốt, một nhãn mỗi dòng.
+# Thứ tự dòng là class index; không đổi thứ tự sau khi đã train.
+# Tên thư mục phải khớp chính xác sau chuẩn hóa Unicode NFC:
+#     dataset/recordings_v1/P01/Cảm ơn/001.mov
 
-# --- Chào hỏi / lịch sự ---
-Xin chào
+Bạn cảm thấy thế nào
+Bạn có cần giúp đỡ không
+Bạn có vấn đề gì không
+Bạn đang làm gì
+Bạn có mệt không
+Bạn quê ở đâu
+Bạn tên gì
 Cảm ơn
-Xin lỗi
-Tạm biệt
-Hẹn gặp lại
-Rất vui được gặp
-
-# --- Nghi vấn ---
-Ở đâu
-Bao nhiêu
-Như thế nào
-Sao thế
-Của ai
 Chuyện gì
+Công viên
+Cứu tôi với
+Đi đâu
 Được không
-
-# --- Chỉ định / thời gian ---
-bạn
-nhà
-hôm nay
-
-# --- Nội dung ---
-khỏe
-tuổi
-ngày
-người
-làm gì
-gặp
-đi
-lâu rồi
-có
-
-# --- Từ vựng khác ---
-mèo
-thích
+Gọi xe cứu thương
+Hẹn gặp lại
+Hôm nay bạn khỏe không
+Lâu rồi không gặp
+Mấy tuổi
+Nhà bạn có mấy người
+Nhà bạn ở đâu
+Như thế nào
+Rất vui được gặp bạn
+Sao thế
+Siêu thị
+Tạm biệt
+Tôi bình thường
+Tôi không khỏe
+Về nhà cẩn thận
+Xin chào
+Xin lỗi

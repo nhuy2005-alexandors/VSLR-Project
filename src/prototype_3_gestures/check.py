@@ -22,7 +22,12 @@ from .prepare_train import (
 )
 from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import HolisticExtractor
-from .vsl3.labels import DEFAULT_LABELS_FILE, normalise_label, read_expected_labels
+from .vsl3.labels import (
+    DEFAULT_LABELS_FILE,
+    normalise_label,
+    normalised_label_directories,
+    read_expected_labels,
+)
 
 configure_utf8_stdio()
 
@@ -81,8 +86,8 @@ def discover_single_person(data_dir: str | Path, person: str) -> list[Clip]:
     if not data_dir.is_dir():
         raise NotADirectoryError(f"--data-dir không phải thư mục: {data_dir}")
     clips = [
-        Clip(label=normalise_label(label_dir.name), person=person, path=path.resolve())
-        for label_dir in sorted(p for p in data_dir.iterdir() if p.is_dir())
+        Clip(label=label, person=person, path=path.resolve())
+        for label_dir, label in normalised_label_directories(data_dir)
         for path in sorted(label_dir.iterdir())
         if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
     ]
@@ -102,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
         "Cờ tường minh, không đoán theo cấu trúc — đoán sai là biến tên nhãn thành tên người.",
     )
     parser.add_argument("--labels-file", default=DEFAULT_LABELS_FILE, help="Danh sách nhãn mong đợi")
-    parser.add_argument("--clips-per-label", type=non_negative_int, default=4)
+    parser.add_argument("--clips-per-label", type=non_negative_int, default=6)
     parser.add_argument("--min-hand-ratio", type=float, default=0.5)
     parser.add_argument("--cache-dir", default="dataset/processed/landmark_cache", help="Dùng chung với vslr-train")
     return parser
@@ -115,7 +120,21 @@ def main() -> None:
     if not 0.0 < args.min_hand_ratio <= 1.0:
         build_parser().error(f"--min-hand-ratio phải trong (0, 1], nhận {args.min_hand_ratio}")
 
+    try:
+        expected_labels = read_expected_labels(args.labels_file)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(
+            f"error: không đọc được manifest nhãn bắt buộc {args.labels_file}: {exc}. "
+            "Không thể xác nhận độ phủ nếu thiếu danh sách nhãn."
+        ) from exc
+
     data_dir = Path(args.data_dir)
+    if not args.person and data_dir.is_dir():
+        for skipped in find_skipped_dirs(data_dir):
+            print(
+                f"CẢNH BÁO: {skipped} chứa video trực tiếp nên bị bỏ qua — cây phải là "
+                f"<người>/<nhãn>/*.mov. Nếu đó là bộ clip cũ, dùng --person để kiểm riêng."
+            )
     try:
         clips = (
             discover_single_person(data_dir, args.person)
@@ -124,26 +143,6 @@ def main() -> None:
         )
     except (ValueError, NotADirectoryError) as exc:
         raise SystemExit(f"error: {exc}") from exc
-
-    if not args.person:
-        for skipped in find_skipped_dirs(data_dir):
-            print(
-                f"CẢNH BÁO: {skipped} chứa video trực tiếp nên bị bỏ qua — cây phải là "
-                f"<người>/<nhãn>/*.mov. Nếu đó là bộ clip cũ, dùng --person để kiểm riêng."
-            )
-
-    expected_labels: list[str] | None = None
-    labels_path = Path(args.labels_file)
-    if labels_path.exists():
-        try:
-            expected_labels = read_expected_labels(labels_path)
-        except ValueError as exc:
-            raise SystemExit(f"error: {exc}") from exc
-    else:
-        print(
-            f"CẢNH BÁO: không có {labels_path}, nên KHÔNG phát hiện được nhãn nào chưa ai quay — "
-            "nhãn chưa quay thì không có trong cây. Tạo file đó (một nhãn mỗi dòng) rồi chạy lại."
-        )
 
     print(f"\nKiểm {len(clips)} clip (cache: {args.cache_dir})\n")
     rows: list[tuple[str, Clip, dict | None, str | None]] = []
@@ -164,7 +163,7 @@ def main() -> None:
     _print_report(rows, clips, expected_labels, args)
 
 
-def _print_report(rows, clips: list[Clip], expected_labels: list[str] | None, args) -> None:
+def _print_report(rows, clips: list[Clip], expected_labels: list[str], args) -> None:
     ok = [r for r in rows if r[0] == "ok"]
     bad = [r for r in rows if r[0] != "ok"]
 
@@ -196,26 +195,24 @@ def _print_report(rows, clips: list[Clip], expected_labels: list[str] | None, ar
         print("  KHONG MO DUOC = lỗi file/truyền. QUA NGAN / KHONG THAY TAY / QUAY LAI = quay lại.")
         print("  LOI HE THONG = không quay lại; sửa lỗi quyền/cache/phần mềm ghi ngay dưới clip.")
 
-    gaps = None
-    if expected_labels is not None:
-        gaps = coverage_gaps(clips, expected_labels, args.clips_per_label)
-        people = sorted({c.person for c in clips})
-        print(
-            f"\nĐộ phủ: {len(people)} người × {len(expected_labels)} nhãn × {args.clips_per_label} clip "
-            f"= {len(people) * len(expected_labels) * args.clips_per_label} clip mong đợi"
-        )
-        if gaps["unexpected"]:
-            print(f"  Nhãn KHÔNG có trong {args.labels_file}: {gaps['unexpected']}")
-        if gaps["missing"]:
-            print(f"  Chưa có clip nào ({len(gaps['missing'])} cặp): {gaps['missing'][:12]}")
-            if len(gaps["missing"]) > 12:
-                print(f"    ... và {len(gaps['missing']) - 12} cặp nữa")
-        if gaps["short"]:
-            print(f"  Còn thiếu clip ({len(gaps['short'])} cặp, cần {args.clips_per_label}): {gaps['short'][:12]}")
-        if not any(gaps.values()):
-            print("  Đủ.")
+    gaps = coverage_gaps(clips, expected_labels, args.clips_per_label)
+    people = sorted({c.person for c in clips})
+    print(
+        f"\nĐộ phủ: {len(people)} người × {len(expected_labels)} nhãn × {args.clips_per_label} clip "
+        f"= {len(people) * len(expected_labels) * args.clips_per_label} clip mong đợi"
+    )
+    if gaps["unexpected"]:
+        print(f"  Nhãn KHÔNG có trong {args.labels_file}: {gaps['unexpected']}")
+    if gaps["missing"]:
+        print(f"  Chưa có clip nào ({len(gaps['missing'])} cặp): {gaps['missing'][:12]}")
+        if len(gaps["missing"]) > 12:
+            print(f"    ... và {len(gaps['missing']) - 12} cặp nữa")
+    if gaps["short"]:
+        print(f"  Còn thiếu clip ({len(gaps['short'])} cặp, cần {args.clips_per_label}): {gaps['short'][:12]}")
+    if not any(gaps.values()):
+        print("  Đủ.")
 
-    incomplete = bool(gaps and any(gaps.values()))
+    incomplete = any(gaps.values())
     if problems or incomplete:
         raise SystemExit(1)
     print("\nTất cả clip đạt và đủ độ phủ.")

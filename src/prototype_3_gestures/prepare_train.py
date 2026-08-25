@@ -17,18 +17,36 @@ from torch.utils.data import DataLoader, Dataset
 
 from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import (
+    AUGMENTATION_VERSION,
     FEATURE_DIM,
     FEATURES_VERSION,
     SEQUENCE_LENGTH,
+    ClipExtractionError,
     HolisticExtractor,
     augment_sequence,
 )
-from .vsl3.labels import DEFAULT_LABELS_FILE, normalise_label, read_expected_labels
-from .vsl3.model import POOLING_FWD_LAST_BWD_FIRST, GestureLSTM, save_checkpoint
+from .vsl3.labels import (
+    DEFAULT_LABELS_FILE,
+    normalise_label,
+    normalised_label_directories,
+    read_expected_labels,
+)
+from .vsl3.model import (
+    DEFAULT_BIDIRECTIONAL,
+    DEFAULT_HIDDEN_SIZE,
+    DEFAULT_NUM_LAYERS,
+    MODEL_ARCHITECTURE_VERSION,
+    POOLING_FWD_LAST_BWD_FIRST,
+    GestureLSTM,
+    save_checkpoint,
+)
 
 SINGLE_SIGNER = "unknown"
 VIDEO_SUFFIXES = {".mov", ".mp4"}
 MAX_FAILED_CLIP_RATIO = 0.05
+TRAINING_RECIPE_VERSION = 1
+TRAIN_LABEL_SMOOTHING = 0.03
+OPTIMIZER_WEIGHT_DECAY = 1e-4
 TRAINING_SIGNATURE_FIELDS = (
     "data_fingerprint",
     "labels",
@@ -39,6 +57,15 @@ TRAINING_SIGNATURE_FIELDS = (
     "seed",
     "pooling",
     "features_version",
+    "augmentation_version",
+    "training_recipe_version",
+    "sequence_length",
+    "feature_dim",
+    "model",
+    "optimizer",
+    "loss",
+    "device",
+    "runtime",
 )
 
 configure_utf8_stdio()
@@ -63,12 +90,12 @@ def discover_clips(data_dir: str | Path) -> list[Clip]:
 
     clips: list[Clip] = []
     for person_dir in sorted(p for p in data_dir.iterdir() if p.is_dir()):
-        for label_dir in sorted(p for p in person_dir.iterdir() if p.is_dir()):
+        for label_dir, label in normalised_label_directories(person_dir):
             for path in sorted(label_dir.iterdir()):
                 if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES:
                     clips.append(
                         Clip(
-                            label=normalise_label(label_dir.name),
+                            label=label,
                             person=person_dir.name,
                             path=path.resolve(),
                         )
@@ -92,7 +119,7 @@ def parse_video_specs(values: list[str]) -> list[Clip]:
         if "=" not in value:
             raise ValueError(f"Invalid --video '{value}'. Expected LABEL=PATH")
         label, raw_path = value.split("=", 1)
-        label = normalise_label(label)
+        label = normalise_label(label.strip())
         path = Path(raw_path.strip()).expanduser().resolve()
         if not label:
             raise ValueError("Gesture label cannot be empty")
@@ -194,10 +221,20 @@ def cache_key(
     feature_dim: int = FEATURE_DIM,
     sequence_length: int = SEQUENCE_LENGTH,
 ) -> str:
+    source_path = Path(path)
+    try:
+        stat = source_path.stat()
+    except FileNotFoundError:
+        # Keeps the pure key helper usable for a not-yet-created path in callers/tests. Real
+        # extraction stats the clip first and therefore never takes this fallback.
+        source_identity = "missing"
+    else:
+        source_identity = f"{stat.st_mtime_ns}|{stat.st_size}|{file_sha256(source_path)}"
     payload = "|".join(
         (
-            Path(path).as_posix(),
-            f"{float(mtime):.6f}",
+            source_path.as_posix(),
+            f"{float(mtime):.9f}",
+            source_identity,
             str(features_version),
             str(feature_dim),
             str(sequence_length),
@@ -212,11 +249,14 @@ def data_fingerprint(clips: list[Clip]) -> str:
     Lets a loso_report.json and a metrics.json be *shown* to describe the same data instead of
     merely claiming it — the repo's numbers rule needs that link to be checkable.
     """
-    payload = "\n".join(
-        f"{clip.person}|{clip.label}|{clip.path.as_posix()}|{clip.path.stat().st_mtime:.6f}"
-        for clip in sorted(clips, key=lambda c: (c.person, c.label, c.path.as_posix()))
-    )
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    rows = []
+    for clip in sorted(clips, key=lambda c: (c.person, c.label, c.path.as_posix())):
+        stat = clip.path.stat()
+        rows.append(
+            f"{clip.person}|{clip.label}|{clip.path.as_posix()}|{stat.st_mtime_ns}|"
+            f"{stat.st_size}|{file_sha256(clip.path)}"
+        )
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
 
 
 def training_signature(metadata: dict) -> str:
@@ -227,6 +267,28 @@ def training_signature(metadata: dict) -> str:
     payload = {field: metadata[field] for field in TRAINING_SIGNATURE_FIELDS}
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def artifact_pair_matches(report_signature: object, metrics: dict, checkpoint_path: str | Path) -> bool:
+    """Verify the current weights file immediately before making a pairing claim."""
+    checkpoint_path = Path(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint_signature = checkpoint.get("config", {}).get("training_signature")
+    checkpoint_labels = list(checkpoint.get("labels", []))
+    return (
+        isinstance(report_signature, str)
+        and report_signature == metrics.get("training_signature") == checkpoint_signature
+        and checkpoint_labels == list(metrics.get("labels", []))
+        and metrics.get("checkpoint_sha256") == file_sha256(checkpoint_path)
+    )
 
 
 def run_metadata(args, clips: list[Clip], labels: list[str], people: list[str], device) -> dict:
@@ -246,7 +308,20 @@ def run_metadata(args, clips: list[Clip], labels: list[str], people: list[str], 
         "num_workers": args.num_workers,
         "pooling": POOLING_FWD_LAST_BWD_FIRST,
         "features_version": FEATURES_VERSION,
+        "augmentation_version": AUGMENTATION_VERSION,
+        "training_recipe_version": TRAINING_RECIPE_VERSION,
+        "sequence_length": SEQUENCE_LENGTH,
+        "feature_dim": FEATURE_DIM,
+        "model": {
+            "architecture_version": MODEL_ARCHITECTURE_VERSION,
+            "hidden_size": DEFAULT_HIDDEN_SIZE,
+            "num_layers": DEFAULT_NUM_LAYERS,
+            "bidirectional": DEFAULT_BIDIRECTIONAL,
+        },
+        "optimizer": {"name": "AdamW", "weight_decay": OPTIMIZER_WEIGHT_DECAY},
+        "loss": {"name": "CrossEntropyLoss", "train_label_smoothing": TRAIN_LABEL_SMOOTHING},
         "device": str(device),
+        "runtime": {"torch": torch.__version__, "numpy": np.__version__},
     }
     metadata["training_signature"] = training_signature(metadata)
     return metadata
@@ -516,9 +591,18 @@ def train_model(
         # than they save.
         val_loader = build_eval_loader(val_sequences, val_targets or [], args)
 
-    model = GestureLSTM(FEATURE_DIM, num_classes).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.03)
+    model = GestureLSTM(
+        FEATURE_DIM,
+        num_classes,
+        hidden_size=DEFAULT_HIDDEN_SIZE,
+        num_layers=DEFAULT_NUM_LAYERS,
+        bidirectional=DEFAULT_BIDIRECTIONAL,
+        pooling=POOLING_FWD_LAST_BWD_FIRST,
+    ).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=args.learning_rate, weight_decay=OPTIMIZER_WEIGHT_DECAY
+    )
+    criterion = nn.CrossEntropyLoss(label_smoothing=TRAIN_LABEL_SMOOTHING)
 
     history: list[dict] = []
     for epoch in range(1, args.epochs + 1):
@@ -574,7 +658,10 @@ def extract_all(clips: list[Clip], cache_dir: Path) -> tuple[list[np.ndarray], l
         for position, clip in enumerate(clips, start=1):
             try:
                 sequence, clip_stats = extract_with_cache(clip, extractor, cache_dir)
-            except Exception as exc:  # one unusable clip must not abort a 540-clip run
+            except (ClipExtractionError, FileNotFoundError) as exc:
+                # Only failures attributable to this source clip may be tolerated. Permission,
+                # MediaPipe/runtime, cache-programming, and other infrastructure errors must abort;
+                # dropping up to 5% of those would train on a silently damaged dataset.
                 failures.append(
                     {
                         "video": str(clip.path),
@@ -653,7 +740,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cache-dir",
         default="dataset/processed/landmark_cache",
-        help="Landmark cache; keyed on (path, mtime, FEATURES_VERSION)",
+        help="Landmark cache; keyed on source SHA-256 plus path/mtime and the feature contract",
     )
     parser.add_argument(
         "--augment", type=non_negative_int, default=120, help="Augmented samples per clip, generated on the fly"
@@ -797,6 +884,11 @@ def main() -> None:
         # accuracy is correct/n exactly, so round() recovers the integer count.
         total_correct = sum(round(fold["test_accuracy"] * fold["test_clips"]) for fold in folds)
         total_tested = sum(fold["test_clips"] for fold in folds)
+        all_predictions = [row for fold in folds for row in fold["predictions"]]
+        ranked = worst_labels(all_predictions, limit=5)
+        # Validate the prediction/extraction join before publishing a report. A broken join means
+        # the diagnostics do not describe the evaluated clips and must leave no success artifact.
+        suspects = suspect_clips(all_predictions, extraction_stats, args.min_hand_ratio)
         report = {
             "mode": "loso",
             **run_metadata(args, clips, labels, people, device),
@@ -829,8 +921,6 @@ def main() -> None:
             f"worst fold '{worst['held_out_person']}' {worst['test_accuracy']:.1%}"
         )
         print(f"training_signature {report['training_signature'][:12]}")
-        all_predictions = [row for fold in folds for row in fold["predictions"]]
-        ranked = worst_labels(all_predictions, limit=5)
         if ranked:
             print(f"\n{len(ranked)} worst label(s) of {len(labels)}:")
             for row in ranked:
@@ -839,7 +929,6 @@ def main() -> None:
         else:
             print(f"\nEvery one of the {len(labels)} labels was predicted correctly on every test clip.")
 
-        suspects = suspect_clips(all_predictions, extraction_stats, args.min_hand_ratio)
         print(
             f"\n{len(suspects)} clip(s) both predicted wrong AND recorded below "
             f"hand_frame_ratio {args.min_hand_ratio:.2f} — re-record candidates:"
@@ -858,6 +947,7 @@ def main() -> None:
     print(f"\nTraining on all {len(clips)} clips for {args.epochs} epochs (no validation, no early stopping)...")
     model, history = train_model(sequences, targets, len(labels), args, device)
 
+    ship_metadata = run_metadata(args, clips, labels, people, device)
     checkpoint_config = {
         "input_dim": FEATURE_DIM,
         "sequence_length": SEQUENCE_LENGTH,
@@ -867,12 +957,24 @@ def main() -> None:
         "bidirectional": model.bidirectional,
         "pooling": model.pooling,
         "features_version": FEATURES_VERSION,
+        "augmentation_version": AUGMENTATION_VERSION,
+        "model_architecture_version": MODEL_ARCHITECTURE_VERSION,
+        "training_recipe_version": TRAINING_RECIPE_VERSION,
+        # This lives inside the same file as the weights. Comparing JSON files alone cannot detect
+        # a stale/replaced checkpoint or a run interrupted between artifact writes.
+        "training_signature": ship_metadata["training_signature"],
     }
-    save_checkpoint(model_dir / "gesture_lstm.pt", model, labels, checkpoint_config)
+    checkpoint_path = model_dir / "gesture_lstm.pt"
+    save_checkpoint(checkpoint_path, model, labels, checkpoint_config)
+    saved_checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    saved_signature = saved_checkpoint.get("config", {}).get("training_signature")
+    if saved_signature != ship_metadata["training_signature"] or list(saved_checkpoint.get("labels", [])) != labels:
+        raise RuntimeError(f"Saved checkpoint verification failed for {checkpoint_path}")
     metrics = {
         "mode": "ship",
         "signer_split": False,
-        **run_metadata(args, clips, labels, people, device),
+        **ship_metadata,
+        "checkpoint_sha256": file_sha256(checkpoint_path),
         "samples": len(clips) * (args.augment + 1),
         "extraction": extraction_stats,
         "failed_clips": failures,
@@ -880,16 +982,17 @@ def main() -> None:
             "This checkpoint is trained on EVERY clip listed in extraction[]: it has no holdout and "
             "carries no accuracy number. Any accuracy you report must come from "
             "`vslr-train --data-dir ... --loso` (models/loso_report.json), and that report is only "
-            "about this checkpoint only when training_signature matches exactly. That signature covers "
-            "the data fingerprint, epochs, augmentation count, batch size, learning rate, seed, pooling "
-            "and feature version. Cross-check the test clips against extraction[].video either way."
+            "about this checkpoint only when training_signature matches exactly in loso_report.json, "
+            "metrics.json, and gesture_lstm.pt. The signature covers data, labels, hyperparameters, "
+            "augmentation/model/training recipe versions, device, and runtime. checkpoint_sha256 binds "
+            "metrics.json to the exact weights file. Cross-check test clips against extraction[].video."
         ),
         "history": history,
     }
     (model_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
     (model_dir / "labels.json").write_text(json.dumps(labels, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"Saved {model_dir / 'gesture_lstm.pt'} ({len(labels)} labels, {args.epochs} epochs, all clips)")
+    print(f"Saved {checkpoint_path} ({len(labels)} labels, {args.epochs} epochs, all clips)")
     print(
         f"training_signature {metrics['training_signature'][:12]} — must match "
         "loso_report.json to pair its accuracy with this checkpoint."
@@ -898,13 +1001,22 @@ def main() -> None:
     if report_path.exists():
         try:
             loso_signature = json.loads(report_path.read_text(encoding="utf-8")).get("training_signature")
-        except (OSError, ValueError) as exc:
+            pair_ok = artifact_pair_matches(loso_signature, metrics, checkpoint_path)
+        except Exception as exc:
+            # Verification is fail-closed: a concurrent replacement, corrupt checkpoint/report,
+            # or read/hash error can suppress PAIR OK but can never manufacture it.
             print(f"WARNING: could not verify {report_path}: {exc}")
         else:
-            if loso_signature == metrics["training_signature"]:
-                print(f"PAIR OK: {report_path} has the same training signature.")
+            if pair_ok:
+                print(
+                    f"PAIR OK: {report_path}, metrics.json, and {checkpoint_path.name} "
+                    "carry the same training signature and the checkpoint SHA-256 still matches."
+                )
             else:
-                print(f"PAIR MISMATCH: {report_path} does NOT describe this training configuration.")
+                print(
+                    f"PAIR MISMATCH: {report_path}, metrics.json, and {checkpoint_path.name} "
+                    "do not carry one training signature."
+                )
     print("This checkpoint has NO accuracy number. Run --loso to get one.")
     print("Next: vslr-camera --no-tts")
 

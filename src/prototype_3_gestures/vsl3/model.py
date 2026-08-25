@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import warnings
 from pathlib import Path
 
@@ -14,15 +15,22 @@ POOLING_FWD_LAST_BWD_FIRST = "fwd_last_bwd_first"
 POOLING_LEGACY_LAST_STEP = "legacy_last_step"
 POOLING_MODES = (POOLING_FWD_LAST_BWD_FIRST, POOLING_LEGACY_LAST_STEP)
 
+# Bump when the network topology or its fixed dropout/head defaults change. Persisting this beside
+# the concrete dimensions keeps a LOSO report from being paired with weights made by another model.
+MODEL_ARCHITECTURE_VERSION = 1
+DEFAULT_HIDDEN_SIZE = 96
+DEFAULT_NUM_LAYERS = 1
+DEFAULT_BIDIRECTIONAL = True
+
 
 class GestureLSTM(nn.Module):
     def __init__(
         self,
         input_dim: int,
         num_classes: int,
-        hidden_size: int = 96,
-        num_layers: int = 1,
-        bidirectional: bool = True,
+        hidden_size: int = DEFAULT_HIDDEN_SIZE,
+        num_layers: int = DEFAULT_NUM_LAYERS,
+        bidirectional: bool = DEFAULT_BIDIRECTIONAL,
         pooling: str = POOLING_FWD_LAST_BWD_FIRST,
     ):
         super().__init__()
@@ -69,14 +77,19 @@ class GestureLSTM(nn.Module):
 def save_checkpoint(path: str | Path, model: GestureLSTM, labels: list[str], config: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "model_state": model.state_dict(),
-            "labels": labels,
-            "config": config,
-        },
-        path,
-    )
+    staging = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "labels": labels,
+                "config": config,
+            },
+            staging,
+        )
+        staging.replace(path)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def load_checkpoint(
@@ -87,6 +100,17 @@ def load_checkpoint(
 ) -> tuple[GestureLSTM, list[str], dict]:
     checkpoint = torch.load(path, map_location=device)
     config = checkpoint["config"]
+
+    # Missing means the checkpoint predates this key but uses the original topology (= v1).
+    # A future/same-shape architecture can change semantics without tripping load_state_dict, so
+    # unlike landmark features there is no meaningful compatibility override in this loader.
+    stored_architecture_version = int(config.get("model_architecture_version", 1))
+    if stored_architecture_version != MODEL_ARCHITECTURE_VERSION:
+        raise ValueError(
+            f"{path} uses model architecture version {stored_architecture_version}, but this install "
+            f"implements version {MODEL_ARCHITECTURE_VERSION}. Refusing to interpret those weights "
+            "with different model architecture semantics."
+        )
 
     # A checkpoint with no "features_version" key was written before the key existed, which means
     # version 1. Feeding it v2 landmarks changes the model input distribution without changing a
@@ -121,9 +145,9 @@ def load_checkpoint(
     model = GestureLSTM(
         input_dim=int(config["input_dim"]),
         num_classes=len(checkpoint["labels"]),
-        hidden_size=int(config.get("hidden_size", 96)),
-        num_layers=int(config.get("num_layers", 1)),
-        bidirectional=bool(config.get("bidirectional", True)),
+        hidden_size=int(config.get("hidden_size", DEFAULT_HIDDEN_SIZE)),
+        num_layers=int(config.get("num_layers", DEFAULT_NUM_LAYERS)),
+        bidirectional=bool(config.get("bidirectional", DEFAULT_BIDIRECTIONAL)),
         pooling=str(pooling),
     )
     model.load_state_dict(checkpoint["model_state"])

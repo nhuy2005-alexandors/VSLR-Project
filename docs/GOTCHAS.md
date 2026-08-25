@@ -123,4 +123,34 @@ Bẫy đã gặp. Tích lũy, không xóa. Gặp bẫy mới → append.
 
 - **Symptom**: LOSO chạy `--augment 0 --learning-rate 1e-4`, ship chạy mặc định 120 / `1e-3`; fingerprint/epochs/seed/features vẫn khớp nhưng hai quy trình khác hẳn.
 - **Cause**: hướng dẫn ghép artifact cũ chỉ liệt kê bốn khóa, dù metadata đã có batch size, learning rate và augmentation.
-- **Avoidance/fix**: chỉ ghép khi `training_signature` khớp; hash bao phủ mọi training input liên quan và thứ tự nhãn. Ship in rõ `PAIR OK`/`PAIR MISMATCH` nếu report tồn tại.
+- **Avoidance/fix**: chỉ ghép khi `training_signature` khớp trong report, metrics và config bên trong checkpoint; `checkpoint_sha256` khóa metrics vào đúng bytes của weights. Hash bao phủ data/nhãn, hyperparameter, recipe/model/augment, device và runtime.
+
+## Cảnh báo thiếu manifest vẫn có thể kết thúc bằng exit 0
+
+- **Symptom**: `vslr-check --labels-file typo.txt` cảnh báo không có manifest rồi vẫn in “Tất cả clip đạt và đủ độ phủ”.
+- **Cause**: `expected_labels=None` làm bỏ hẳn `coverage_gaps`; `incomplete = bool(gaps and ...)` thành false.
+- **Avoidance/fix**: manifest là input bắt buộc và được đọc trước MediaPipe. Mọi `OSError`/manifest rỗng-trùng nhãn exit 1; `_print_report` luôn nhận `list[str]`, không có nhánh “không biết expected nhưng vẫn thành công”.
+
+## `except Exception` biến lỗi hệ thống thành clip quay hỏng
+
+- **Symptom**: `PermissionError` ở 1/20 clip bị in `SKIP`; đúng 5% nên gate `> 5%` vẫn train 19 clip còn lại.
+- **Cause**: quota chất lượng clip bắt mọi exception, không phân biệt lỗi dữ liệu và hạ tầng.
+- **Avoidance/fix**: extractor raise `ClipExtractionError` riêng cho không mở được/quá ngắn/thấy tay <10%. `extract_all` chỉ bắt loại này và `FileNotFoundError`; permission, MediaPipe runtime và lỗi lập trình nổi lên làm abort.
+
+## Chuẩn hóa Unicode không được phép sửa luôn cấu trúc thư mục
+
+- **Symptom**: directory `' Cảm ơn'` từng qua manifest do `.strip()`; hai directory NFC/NFD của cùng signer từng gộp thành một class và làm phồng số clip.
+- **Cause**: cùng một helper vừa NFC vừa strip, và discovery mất raw directory name sau chuẩn hóa.
+- **Avoidance/fix**: `normalise_label` chỉ NFC. Parser manifest tự strip từng dòng như formatting; tên directory giữ whitespace để exact gate bắt. Discovery nhớ raw name theo signer và từ chối collision sau NFC.
+
+## Path + mtime không định danh được nội dung video
+
+- **Symptom**: ghi bytes mới vào cùng path rồi restore mtime làm `cache_key_same=True`, `data_fingerprint_same=True`; train có thể lấy landmark cũ và ghép LOSO/ship như chưa đổi data.
+- **Cause**: timestamp là metadata có thể được bảo tồn có chủ ý; ngay cả thêm size vẫn bỏ sót thay nội dung cùng kích thước.
+- **Avoidance/fix**: băm SHA-256 toàn bộ file cho cache key và data fingerprint, kèm size/mtime_ns để audit. Cache cũ miss một lần có chủ ý.
+
+## Ghi version vào checkpoint mà loader không kiểm chỉ tạo cảm giác an toàn
+
+- **Symptom**: checkpoint khai `model_architecture_version=999` nhưng vẫn load vì tensor shape khớp.
+- **Cause**: `load_checkpoint` chỉ kiểm feature version; metadata architecture được ghi nhưng không có consumer.
+- **Avoidance/fix**: thiếu architecture key được hiểu là topology gốc v1; version khác `MODEL_ARCHITECTURE_VERSION` luôn raise. Không có override vì code hiện tại không thể biết semantics của topology tương lai dù shape trùng.

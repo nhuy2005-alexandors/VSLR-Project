@@ -13,5 +13,5 @@ Spec xong, trước khi viết dòng code đầu tiên: chạy `spec-critic` n�
 Trạng thái:
 
 - `pipeline-restructure.md` — đã implement.
-- `dataset-recording.md` — chưa quay; chờ chốt manifest nhãn.
+- `dataset-recording.md` — chưa quay; manifest V1 đã chốt 30 nhãn, kế hoạch 4 người × 6 clip.
 - `record-to-test.md` — lỗ hổng 1–2 đã implement, lỗ hổng 3 (`vslr-sentence`) pending.

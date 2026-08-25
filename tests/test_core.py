@@ -1,3 +1,5 @@
+import json
+import os
 import unicodedata
 import unittest
 import warnings
@@ -11,6 +13,7 @@ import mediapipe as mp
 import numpy as np
 import torch
 
+import prototype_3_gestures.prepare_train as prepare_train_module
 from prototype_3_gestures.prepare_train import (
     SINGLE_SIGNER,
     Clip,
@@ -18,9 +21,13 @@ from prototype_3_gestures.prepare_train import (
     build_eval_loader,
     build_parser,
     cache_key,
+    data_fingerprint,
     discover_clips,
     evaluate,
+    extract_all,
     extract_with_cache,
+    file_sha256,
+    main as train_main,
     missing_labels_after_drop,
     parse_video_specs,
     signer_split,
@@ -35,19 +42,21 @@ from prototype_3_gestures.check import (
     clip_status,
     coverage_gaps,
     find_skipped_dirs,
+    main as check_main,
     read_expected_labels,
 )
 from prototype_3_gestures.vsl3.features import (
     FEATURE_DIM,
     FEATURES_VERSION,
     SEQUENCE_LENGTH,
+    ClipExtractionError,
     HolisticExtractor,
     augment_sequence,
     resample_sequence,
     time_warp_sequence,
 )
 from prototype_3_gestures.vsl3.model import GestureLSTM, load_checkpoint, save_checkpoint
-from prototype_3_gestures.realtime import Segment, SegmentTracker, should_accept_prediction
+from prototype_3_gestures.realtime import Segment, SegmentTracker, main as realtime_main, should_accept_prediction
 
 
 def _clip(label: str, person: str, name: str = "a.mov") -> Clip:
@@ -243,6 +252,25 @@ class ModelTests(unittest.TestCase):
             self.assertIn("FEATURES_VERSION", messages)
             self.assertIn("retrain", messages.lower())
 
+    def test_checkpoint_with_unknown_model_architecture_version_is_refused(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "future-model.pt"
+            model = GestureLSTM(FEATURE_DIM, 3)
+            save_checkpoint(
+                path,
+                model,
+                ["a", "b", "c"],
+                {
+                    "input_dim": FEATURE_DIM,
+                    "features_version": FEATURES_VERSION,
+                    "pooling": "fwd_last_bwd_first",
+                    "model_architecture_version": 999,
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "model architecture"):
+                load_checkpoint(path)
+
     def test_legacy_pooling_stays_reproducible_for_old_checkpoints(self):
         model = GestureLSTM(FEATURE_DIM, 3, hidden_size=4, pooling="legacy_last_step")
         out = torch.zeros(1, 5, 8)
@@ -284,6 +312,34 @@ class DiscoveryTests(unittest.TestCase):
             clips = discover_clips(tmp)
 
         self.assertEqual(clips[0].label, "Cảm ơn")
+
+    def test_discover_refuses_two_raw_directories_that_collapse_to_one_nfc_label(self):
+        nfc = "Cảm ơn"
+        nfd = unicodedata.normalize("NFD", nfc)
+        self.assertNotEqual(nfc, nfd)
+        with TemporaryDirectory() as tmp:
+            for raw_label in (nfc, nfd):
+                folder = Path(tmp) / "P1" / raw_label
+                folder.mkdir(parents=True)
+                (folder / f"{len(raw_label)}.mov").touch()
+
+            with self.assertRaises(ValueError) as ctx:
+                discover_clips(tmp)
+
+        self.assertIn("P1", str(ctx.exception))
+        self.assertIn("Cảm ơn", str(ctx.exception))
+
+    def test_directory_whitespace_is_not_silently_stripped_into_a_manifest_label(self):
+        with TemporaryDirectory() as tmp:
+            # Windows strips trailing dots/spaces from directory paths, so use the leading-space
+            # form of the same malformed label on every platform.
+            folder = Path(tmp) / "P1" / " Cảm ơn"
+            folder.mkdir(parents=True)
+            (folder / "01.mov").touch()
+            clips = discover_clips(tmp)
+
+        with self.assertRaises(ValueError):
+            validate_expected_labels(clips, ["Cảm ơn"])
 
     def test_parse_video_specs_marks_every_clip_single_signer(self):
         with TemporaryDirectory() as tmp:
@@ -448,6 +504,21 @@ class CacheTests(unittest.TestCase):
         self.assertNotEqual(base, cache_key(path, mtime=1.0, feature_dim=FEATURE_DIM + 1))
         self.assertNotEqual(base, cache_key(path, mtime=1.0, sequence_length=SEQUENCE_LENGTH + 1))
 
+    def test_video_byte_change_invalidates_cache_and_fingerprint_when_mtime_is_restored(self):
+        with TemporaryDirectory() as tmp:
+            video = Path(tmp) / "01.mov"
+            video.write_bytes(b"AAAA")
+            original = video.stat()
+            clip = Clip(label="Cảm ơn", person="P1", path=video.resolve())
+            first_key = cache_key(video, original.st_mtime)
+            first_fingerprint = data_fingerprint([clip])
+
+            video.write_bytes(b"BBBB")  # same path and size, different bytes
+            os.utime(video, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+            self.assertNotEqual(cache_key(video, video.stat().st_mtime), first_key)
+            self.assertNotEqual(data_fingerprint([clip]), first_fingerprint)
+
     def test_corrupt_cache_entry_is_discarded_and_reextracted(self):
         """A poisoned cache entry must not be reported as a bad clip, nor poison it forever."""
 
@@ -535,9 +606,51 @@ class CacheTests(unittest.TestCase):
                 self.assertEqual(sequence.shape, (SEQUENCE_LENGTH, FEATURE_DIM))
 
 
+class ExtractionFailureTests(unittest.TestCase):
+    class DummyExtractor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return None
+
+    def test_system_failure_is_not_tolerated_as_one_bad_clip(self):
+        clip = _clip("Cảm ơn", "P1")
+        with (
+            mock.patch(
+                "prototype_3_gestures.prepare_train.HolisticExtractor",
+                return_value=self.DummyExtractor(),
+            ),
+            mock.patch(
+                "prototype_3_gestures.prepare_train.extract_with_cache",
+                side_effect=PermissionError("Access is denied"),
+            ),
+        ):
+            with self.assertRaises(PermissionError):
+                extract_all([clip], Path("cache"))
+
+    def test_expected_bad_recording_can_still_be_isolated(self):
+        clip = _clip("Cảm ơn", "P1")
+        with (
+            mock.patch(
+                "prototype_3_gestures.prepare_train.HolisticExtractor",
+                return_value=self.DummyExtractor(),
+            ),
+            mock.patch(
+                "prototype_3_gestures.prepare_train.extract_with_cache",
+                side_effect=ClipExtractionError("detected hands in only 2.0%"),
+            ),
+        ):
+            sequences, kept, stats, failures = extract_all([clip], Path("cache"))
+
+        self.assertEqual((sequences, kept, stats), ([], [], []))
+        self.assertEqual(len(failures), 1)
+        self.assertIn("ClipExtractionError", failures[0]["error"])
+
+
 class TrainingSignatureTests(unittest.TestCase):
-    def test_every_training_input_changes_the_signature(self):
-        metadata = {
+    def _metadata(self):
+        return {
             "data_fingerprint": "abc",
             "labels": ["Cảm ơn", "Xin chào"],
             "epochs": 40,
@@ -547,8 +660,20 @@ class TrainingSignatureTests(unittest.TestCase):
             "seed": 42,
             "pooling": "fwd_last_bwd_first",
             "features_version": FEATURES_VERSION,
+            "augmentation_version": 1,
+            "training_recipe_version": 1,
+            "sequence_length": SEQUENCE_LENGTH,
+            "feature_dim": FEATURE_DIM,
+            "model": {"architecture_version": 1, "hidden_size": 96},
+            "optimizer": {"name": "AdamW", "weight_decay": 1e-4},
+            "loss": {"name": "CrossEntropyLoss", "train_label_smoothing": 0.03},
+            "device": "cpu",
+            "runtime": {"torch": str(torch.__version__), "numpy": np.__version__},
             "num_workers": 0,
         }
+
+    def test_every_training_input_changes_the_signature(self):
+        metadata = self._metadata()
         baseline = training_signature(metadata)
 
         for field in (
@@ -561,6 +686,15 @@ class TrainingSignatureTests(unittest.TestCase):
             "seed",
             "pooling",
             "features_version",
+            "augmentation_version",
+            "training_recipe_version",
+            "sequence_length",
+            "feature_dim",
+            "model",
+            "optimizer",
+            "loss",
+            "device",
+            "runtime",
         ):
             changed = dict(metadata)
             changed[field] = f"different-{field}"
@@ -569,6 +703,98 @@ class TrainingSignatureTests(unittest.TestCase):
 
         worker_only = dict(metadata, num_workers=4)
         self.assertEqual(training_signature(worker_only), baseline)
+
+    def test_device_changes_the_signature(self):
+        metadata = self._metadata()
+
+        self.assertNotEqual(training_signature(metadata), training_signature(dict(metadata, device="cuda")))
+
+    def test_ship_embeds_the_metrics_training_signature_in_checkpoint_config(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            labels = ["Cảm ơn", "Xin chào"]
+            clips = []
+            for label in labels:
+                folder = root / "P1" / label
+                folder.mkdir(parents=True)
+                for index in range(2):
+                    path = folder / f"{index}.mov"
+                    path.touch()
+                    clips.append(Clip(label=label, person="P1", path=path.resolve()))
+            sequences = [np.zeros((SEQUENCE_LENGTH, FEATURE_DIM), dtype=np.float32) for _ in clips]
+            extraction = [
+                {
+                    "video": str(clip.path),
+                    "label": clip.label,
+                    "person": clip.person,
+                    "sampled_frames": 20,
+                    "trimmed_frames": 20,
+                    "hand_frame_ratio": 1.0,
+                    "from_cache": True,
+                }
+                for clip in clips
+            ]
+            model = GestureLSTM(FEATURE_DIM, len(labels))
+            model_dir = root / "models"
+            argv = [
+                "vslr-train",
+                "--data-dir",
+                str(root),
+                "--model-dir",
+                str(model_dir),
+                "--cache-dir",
+                str(root / "cache"),
+                "--epochs",
+                "1",
+                "--augment",
+                "0",
+            ]
+            with (
+                mock.patch("sys.argv", argv),
+                mock.patch("prototype_3_gestures.prepare_train.discover_clips", return_value=clips),
+                mock.patch("prototype_3_gestures.prepare_train.read_expected_labels", return_value=labels),
+                mock.patch(
+                    "prototype_3_gestures.prepare_train.extract_all",
+                    return_value=(sequences, clips, extraction, []),
+                ),
+                mock.patch(
+                    "prototype_3_gestures.prepare_train.train_model",
+                    return_value=(model, []),
+                ),
+            ):
+                train_main()
+
+            checkpoint = torch.load(model_dir / "gesture_lstm.pt", map_location="cpu")
+            checkpoint_config = checkpoint["config"]
+            metrics = json.loads((model_dir / "metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual(checkpoint_config["training_signature"], metrics["training_signature"])
+            self.assertEqual(metrics["checkpoint_sha256"], file_sha256(model_dir / "gesture_lstm.pt"))
+
+    def test_pair_decision_rechecks_the_current_checkpoint_hash(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gesture_lstm.pt"
+            labels = ["Cảm ơn", "Xin chào"]
+            signature = "same-training-signature"
+            config = {
+                "input_dim": FEATURE_DIM,
+                "sequence_length": SEQUENCE_LENGTH,
+                "features_version": FEATURES_VERSION,
+                "pooling": "fwd_last_bwd_first",
+                "training_signature": signature,
+            }
+            save_checkpoint(path, GestureLSTM(FEATURE_DIM, len(labels)), labels, config)
+            metrics = {
+                "labels": labels,
+                "training_signature": signature,
+                "checkpoint_sha256": file_sha256(path),
+            }
+
+            self.assertTrue(prepare_train_module.artifact_pair_matches(signature, metrics, path))
+
+            # Same claimed recipe, different random weights: the embedded signature alone is not
+            # enough. The decision-time SHA must reject the replacement.
+            save_checkpoint(path, GestureLSTM(FEATURE_DIM, len(labels)), labels, config)
+            self.assertFalse(prepare_train_module.artifact_pair_matches(signature, metrics, path))
 
 
 class TrainLoopTests(unittest.TestCase):
@@ -866,6 +1092,33 @@ class SegmentTrackerTests(unittest.TestCase):
 
 
 class CheckToolTests(unittest.TestCase):
+    def test_missing_manifest_fails_before_mediapipe_and_cannot_report_success(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = root / "P1" / "Cảm ơn"
+            folder.mkdir(parents=True)
+            (folder / "01.mov").touch()
+            missing_manifest = root / "missing-labels.txt"
+            argv = [
+                "vslr-check",
+                "--data-dir",
+                str(root),
+                "--labels-file",
+                str(missing_manifest),
+            ]
+            with (
+                mock.patch("sys.argv", argv),
+                mock.patch(
+                    "prototype_3_gestures.check.HolisticExtractor",
+                    side_effect=AssertionError("MediaPipe must not start without a manifest"),
+                ),
+            ):
+                with self.assertRaises(SystemExit) as ctx:
+                    check_main()
+
+        self.assertNotEqual(ctx.exception.code, 0)
+        self.assertIn("missing-labels.txt", str(ctx.exception))
+
     def test_reads_expected_labels_skipping_comments_and_blanks(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "labels.txt"
@@ -933,6 +1186,25 @@ class CheckToolTests(unittest.TestCase):
 
 
 class RealtimeLogicTests(unittest.TestCase):
+    def test_non_finite_duration_arguments_are_refused_before_model_load(self):
+        for option, value in (
+            ("--word-gap", "nan"),
+            ("--sentence-gap", "nan"),
+            ("--min-seconds", "nan"),
+            ("--max-seconds", "nan"),
+            ("--max-seconds", "inf"),
+        ):
+            with self.subTest(option=option, value=value):
+                with (
+                    mock.patch("sys.argv", ["vslr-camera", option, value]),
+                    mock.patch(
+                        "prototype_3_gestures.realtime.load_checkpoint",
+                        side_effect=AssertionError("invalid arguments must stop before model load"),
+                    ),
+                ):
+                    with self.assertRaises(SystemExit):
+                        realtime_main()
+
     def test_prediction_must_meet_confidence_threshold(self):
         self.assertFalse(should_accept_prediction(0.719, 0.72))
         self.assertTrue(should_accept_prediction(0.72, 0.72))

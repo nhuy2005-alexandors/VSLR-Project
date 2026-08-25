@@ -22,6 +22,7 @@ tts = ["pyttsx3"]
 vslr-train = "prototype_3_gestures.prepare_train:main"
 vslr-camera = "prototype_3_gestures.realtime:main"
 vslr-check = "prototype_3_gestures.check:main"
+vslr-init-dataset = "prototype_3_gestures.init_dataset:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

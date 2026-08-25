@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import subprocess
 import sys
@@ -185,16 +186,17 @@ def main() -> None:
     )
     parser.add_argument("--no-tts", action="store_true")
     args = parser.parse_args()
-    if not 0.0 < args.confidence <= 1.0:
+    if not math.isfinite(args.confidence) or not 0.0 < args.confidence <= 1.0:
         parser.error(f"--confidence must be in (0, 1], got {args.confidence}")
     for name, value in (("--word-gap", args.word_gap), ("--sentence-gap", args.sentence_gap)):
-        if value <= 0.0:
-            parser.error(f"{name} must be > 0, got {value}")
-    if args.min_seconds <= 0.0:
-        parser.error(f"--min-seconds must be > 0, got {args.min_seconds}")
-    if args.max_seconds < args.min_seconds:
+        if not math.isfinite(value) or value <= 0.0:
+            parser.error(f"{name} must be finite and > 0, got {value}")
+    if not math.isfinite(args.min_seconds) or args.min_seconds <= 0.0:
+        parser.error(f"--min-seconds must be finite and > 0, got {args.min_seconds}")
+    if not math.isfinite(args.max_seconds) or args.max_seconds < args.min_seconds:
         parser.error(
-            f"--max-seconds ({args.max_seconds}) must be >= --min-seconds ({args.min_seconds}); "
+            f"--max-seconds ({args.max_seconds}) must be finite and >= "
+            f"--min-seconds ({args.min_seconds}); "
             "otherwise every segment is dropped and the demo silently recognises nothing."
         )
 

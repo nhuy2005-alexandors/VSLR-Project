@@ -59,9 +59,11 @@ Quyết định kiến trúc + LÝ DO. Tích lũy, không xóa.
 - **Date**: 2026-08-22
 - **Context**: suy nhãn từ cây chỉ phát hiện được nhãn đang tồn tại. Nếu cả 5 người đều quên cùng một nhãn, cây 26 lớp vẫn tự nhất quán và LOSO chạy xanh dưới tên bài toán 27 lớp.
 - **Decision**: `dataset/labels.txt` là nguồn sự thật; `vslr-train --data-dir` đọc `--labels-file`, chuẩn hóa NFC và từ chối cả nhãn thiếu toàn cục lẫn thư mục ngoài manifest **trước MediaPipe**. Thứ tự dòng trong manifest là thứ tự class index. `--video` legacy giữ self-contained vì nó cố ý train một tập con một người.
-- **Trade-offs**: danh sách 27 nhãn đề xuất phải được chốt trước khi train cây mới. Đây là blocker có chủ ý: fail sớm tốt hơn sinh artifact sai số lớp.
+- **Trade-offs**: manifest phải được chốt trước khi train cây mới. Blocker này đã được giải quyết cho V1 bởi ADR-013; fail sớm vẫn tốt hơn sinh artifact sai số lớp.
 
 ## ADR-008: Chữ ký đầy đủ mới được ghép LOSO với checkpoint ship
+
+> **ĐƯỢC SIẾT bởi ADR-010 (2026-08-23).** Bản này mới buộc hai file JSON, chưa buộc chính weights.
 
 - **Date**: 2026-08-22
 - **Context**: cùng `data_fingerprint`/epochs/seed nhưng khác augmentation, batch size hay learning rate vẫn là hai quy trình train khác nhau; gọi accuracy của một quy trình là số của quy trình kia là sai.
@@ -74,3 +76,31 @@ Quyết định kiến trúc + LÝ DO. Tích lũy, không xóa.
 - **Context**: checkpoint v1 nhận tensor đúng shape từ extractor v2 nên PyTorch không báo, nhưng phân phối landmark khác và chính loader biết predictions không đáng tin. Warning vẫn cho phép demo tiếp tục như thể hợp lệ.
 - **Decision**: `load_checkpoint` raise mặc định khi `features_version` khác (thiếu khóa = v1). `vslr-camera --allow-incompatible-model` là opt-in tường minh chỉ cho demo legacy tạm thời; checkpoint mới v2 chạy không cần cờ.
 - **Trade-offs**: `vslr-camera --no-tts` trên clean checkout hiện bị chặn cho tới khi chủ dự án cho phép train lại artifact. Không tự ghi đè model đang track.
+
+## ADR-010: Pair accuracy bằng hợp đồng ba artifact, không chỉ hai JSON
+
+- **Date**: 2026-08-23
+- **Context**: `loso_report.json` và `metrics.json` có thể cùng signature trong khi `gesture_lstm.pt` là file cũ/bị thay hoặc run bị ngắt giữa các lần ghi. Khi signature không nằm trong checkpoint, `PAIR OK` không nói gì về weights thật.
+- **Decision**: ghi `training_signature` vào config bên trong checkpoint, đọc lại checkpoint sau khi save, và chỉ in `PAIR OK` khi report/metrics/checkpoint cùng signature. Metrics giữ `checkpoint_sha256`; checkpoint được ghi staging rồi atomic replace. Signature thêm augmentation/model/training-recipe version, kiến trúc, optimizer/loss constants, device và runtime.
+- **Trade-offs**: đổi device/runtime hoặc recipe buộc chạy lại LOSO để ghép số; đây là fail-closed có chủ ý. `num_workers` vẫn bị loại vì không đổi sample hay optimizer step.
+
+## ADR-011: Cổng ingest fail-closed theo loại lỗi
+
+- **Date**: 2026-08-23
+- **Context**: thiếu manifest từng vẫn exit 0; `.strip()` từng cho directory sai khoảng trắng qua cổng; hai raw directory NFC/NFD từng bị gộp; `except Exception` từng biến permission/runtime error thành một clip xấu được dung sai.
+- **Decision**: `vslr-check` bắt buộc manifest trước MediaPipe; tên directory chỉ NFC, không strip, và collision raw-name của cùng signer bị từ chối. Chỉ `ClipExtractionError` (ba lỗi nguồn video đã định danh) hoặc file biến mất được đưa vào quota clip lỗi; mọi lỗi hệ thống khác abort.
+- **Trade-offs**: một lỗi hạ tầng nhỏ dừng cả train và cần sửa rồi resume từ cache. Đổi lại pipeline không thể ship artifact từ dataset bị giảm âm thầm vì lỗi máy/quyền/phần mềm.
+
+## ADR-012: Nội dung video, không phải timestamp, định danh dữ liệu
+
+- **Date**: 2026-08-23
+- **Context**: công cụ copy/restore có thể thay bytes nhưng giữ mtime; cache và `data_fingerprint` cũ chỉ dùng path+mtime nên trả landmark cũ và giữ nguyên training signature cho dữ liệu mới.
+- **Decision**: cache key thêm SHA-256 bytes nguồn, size và mtime nanosecond; `data_fingerprint` dùng SHA-256 trên từng `(person, label, path, mtime_ns, size, source_sha256)`. Loader cũng kiểm `model_architecture_version`; thiếu khóa = topology gốc v1, version lạ fail-closed.
+- **Trade-offs**: mỗi check/train phải đọc bytes video để hash và cache cũ miss một lần. Chi phí I/O này được chấp nhận để LOSO/ship không thể nhận nhầm landmark hoặc chữ ký của video khác.
+
+## ADR-013: Manifest V1 có 30 nhãn; cây quay được sinh từ manifest
+
+- **Date**: 2026-08-24
+- **Context**: cây `dataset/raw/` hiện chứa bộ legacy không có signer ID. Tạo thư mục thủ công cho 4 người × 30 nhãn dễ thiếu cặp, sai Unicode hoặc trộn dữ liệu cũ. Số lớp tương lai có thể là 20, 25 hay hơn 30 nên không được viết cứng vào code.
+- **Decision**: chốt thứ tự 30 nhãn V1 trong `dataset/labels.txt`. `vslr-init-dataset` đọc manifest và tạo `DIR/P01..P04/<nhãn>/`; mặc định 6 clip mỗi cặp nhưng chỉ tạo thư mục, không tạo placeholder, di chuyển hoặc ghi đè video. Bộ mới dùng `dataset/recordings_v1`; label và person được pipeline suy chính xác từ đường dẫn.
+- **Trade-offs**: đổi tập nhãn phải dùng manifest/phiên bản dữ liệu mới. Bốn người đủ để chạy LOSO phục vụ đánh giá prototype và demo, nhưng chưa đủ để tuyên bố tổng quát hóa mạnh cho người ký mới.

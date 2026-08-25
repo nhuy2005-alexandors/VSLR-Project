@@ -22,6 +22,14 @@ SEQUENCE_LENGTH = 60
 #   clip's landmarks depended on which clip was extracted before it.
 FEATURES_VERSION = 2
 
+# Bump whenever augment_sequence's operations, ranges, probabilities, or composition change. LOSO
+# and ship runs only share an accuracy claim when they used the same augmentation recipe.
+AUGMENTATION_VERSION = 1
+
+
+class ClipExtractionError(ValueError):
+    """An expected source-video/recording failure that may be isolated to one clip."""
+
 
 @dataclass(frozen=True)
 class FrameObservation:
@@ -224,7 +232,7 @@ class HolisticExtractor:
         video_path = Path(video_path)
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            raise ValueError(f"Cannot open video: {video_path}")
+            raise ClipExtractionError(f"Cannot open video: {video_path}")
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         stride = max(1, total_frames // 240) if total_frames > 0 else 1
@@ -252,10 +260,10 @@ class HolisticExtractor:
         cap.release()
 
         if len(frames) < 8:
-            raise ValueError(f"Video {video_path} has too few readable frames ({len(frames)})")
+            raise ClipExtractionError(f"Video {video_path} has too few readable frames ({len(frames)})")
         hand_ratio = hand_frames / len(frames)
         if hand_ratio < 0.10:
-            raise ValueError(
+            raise ClipExtractionError(
                 f"MediaPipe detected hands in only {hand_ratio:.1%} of sampled frames for {video_path}. "
                 "Re-record with both hands/body clearly visible."
             )

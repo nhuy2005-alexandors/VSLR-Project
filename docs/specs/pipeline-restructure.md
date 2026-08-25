@@ -63,7 +63,7 @@ Phát hiện dữ liệu:
 
 Cache landmark:
 
-- [ ] Khóa cache `(path, mtime, FEATURE_DIM, SEQUENCE_LENGTH, FEATURES_VERSION)`. `FEATURES_VERSION` là hằng trong `features.py`, tăng tay khi sửa `normalize_landmarks` / trim / stride / ngưỡng confidence — không có nó thì sửa code xong cache trả landmark cũ và mọi số phía sau mô tả extractor cũ.
+- [ ] Khóa cache `(source_sha256, path, mtime_ns, size, FEATURE_DIM, SEQUENCE_LENGTH, FEATURES_VERSION)`. Content hash ngăn copy/restore giữ timestamp trả landmark của video cũ. `FEATURES_VERSION` là hằng trong `features.py`, tăng tay khi sửa `normalize_landmarks` / trim / stride / ngưỡng confidence.
 - [ ] Cache lưu **kèm** `sampled_frames`, `trimmed_frames`, `hand_frame_ratio`. `metrics.json` phải luôn có `extraction[]` đủ mọi clip kể cả khi cache hit — quy tắc số liệu trong `CLAUDE.md` và bước nghiệm thu trong `docs/specs/dataset-recording.md` đều đọc khóa này.
 - [ ] Ghi cache **từng clip một** ngay khi xong → chạy lại là resume, không mất công đã làm.
 - [ ] Clip lỗi (`extract_video` raise: dưới 8 frame, hoặc `hand_frame_ratio < 0.10`) → ghi nhận rồi **đi tiếp**, không chết cả run 540 clip. Cuối run in danh sách clip lỗi; `raise` nếu quá 5% clip lỗi.
@@ -144,4 +144,4 @@ Test mới:
 ## Chưa quyết — cần chủ dự án
 
 - **4 clip hay 6 clip mỗi người mỗi nhãn.** Spec này chọn 4 và đảo `dataset-recording.md:83`. Lý do cũ đã hết hiệu lực: nó lập luận 6 clip vì ở 3 nhãn mỗi fold chỉ test 3 clip nên accuracy nhảy bậc 33%. Ở 27 nhãn × 5 người mỗi fold test **108 clip**, sai một clip là 0,93%. Chênh lệch công quay: 540 clip so với 810 clip.
-- **Danh sách 27 nhãn** chưa chốt (chủ dự án sẽ lên sau). Con số 27 trong spec này là giả định; đổi số nhãn không đổi thiết kế, chỉ đổi số clip mỗi fold.
+- **Danh sách 27 nhãn** là giả định lúc viết spec. V1 sau đó được chốt thành 30 nhãn theo ADR-013; thiết kế không đổi theo số lớp.
