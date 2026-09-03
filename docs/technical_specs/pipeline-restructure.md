@@ -1,4 +1,7 @@
-# As-built — Tái cấu trúc pipeline train
+# As-built — Tái cấu trúc pipeline train (lịch sử)
+
+> Phần hardening hiện hành nằm ở `docs/technical_specs/pipeline-hardening.md`. Các lệnh và
+> dimension trong tài liệu lịch sử này không còn là contract runtime nếu khác tài liệu mới.
 
 _Xong: 2026-08-22. Spec: `docs/specs/pipeline-restructure.md` (rev 2, sau `spec-critic`). Test: **24 passed** (7/7 mutation bị bắt). Đã qua một vòng `reviewer` (verdict: BLOCKED → 2 blocker + 6 should-fix, đã xử lý hết bên dưới)._
 
@@ -7,8 +10,8 @@ _Xong: 2026-08-22. Spec: `docs/specs/pipeline-restructure.md` (rev 2, sau `spec-
 `vslr-train` tách thành hai chế độ dùng chung một lệnh, và data model mang ID người.
 
 ```bash
-vslr-train --data-dir dataset/raw --loso     # ĐO   -> models/loso_report.json, không ghi checkpoint
-vslr-train --data-dir dataset/raw            # SHIP -> gesture_lstm.pt + labels.json + metrics.json
+vslr-train --data-dir dataset/recordings_v1 --loso     # ĐO; đọc dataset/recording_plan.json
+vslr-train --data-dir dataset/recordings_v1            # SHIP; đọc cùng recording plan
 vslr-train --video "Nhãn=path.mov" ...       # chế độ một-người, --loso bị từ chối
 ```
 
@@ -47,7 +50,7 @@ labels = label_order(clips);  targets = [label_to_idx[c.label] ...]
 |---|---|
 | `src/prototype_3_gestures/prepare_train.py` | viết lại. Thêm `Clip`, `discover_clips`, `validate_clips`, `signer_split`, `cache_key`, `extract_with_cache`, `GestureDataset`, `train_model`, `extract_all`, `build_parser`. Xóa `build_dataset`, `source_holdout_split`, `best_state`/`best_epoch`/`final_fit_epochs`, khối refit, ghi npz |
 | `src/prototype_3_gestures/vsl3/model.py` | `pool_sequence()` + tham số `pooling`; `load_checkpoint` mặc định `legacy_last_step` khi thiếu khóa |
-| `src/prototype_3_gestures/vsl3/features.py` | ban đầu thêm `FEATURES_VERSION = 1`; hiện là **2** sau khi cách ly MediaPipe theo clip |
+| `src/prototype_3_gestures/vsl3/features.py` | feature contract hiện là **3**, 203 chiều gồm presence trái/phải và xử lý missing-aware |
 | `tests/test_core.py` | 7 test → **17 test** |
 
 Không đổi: `normalize_landmarks`, `augment_sequence`, `resample_sequence`, `HolisticExtractor`, `realtime.py`.
@@ -64,7 +67,7 @@ Không đổi: `normalize_landmarks`, `augment_sequence`, `resample_sequence`, `
 | Re-validate sau drop nằm ngoài try/except → traceback trần sau cả lượt extract | Bọc vào `SystemExit` kèm số clip đã drop |
 | Augment tính lại mỗi epoch dù seed làm nó giống hệt: ~40 s/epoch ở 540 clip, ~2,2 h cho LOSO | Thêm `--num-workers` (+ `persistent_workers`). Đã chạy thật `--num-workers 2` trên Windows, exit 0 |
 | Report không tái lập được: thiếu `seed`, `learning_rate`, `batch_size`, timestamp; và hai file không chứng minh được là cùng một dữ liệu | `run_metadata()` dùng chung cho cả hai file, thêm `created_at` + `data_fingerprint` (SHA-256 trên `(person, label, path, mtime_ns, size, source_sha256)` đã sort). Đổi bytes dù giữ path/size/mtime vẫn đổi fingerprint. |
-| `features_version` ghi vào checkpoint mà không ai đọc | `load_checkpoint` so với hiện tại; lệch giờ **raise mặc định**, chỉ opt-in legacy mới warn |
+| `features_version` ghi vào checkpoint mà không ai đọc | `load_checkpoint` so với hiện tại; lệch version/contract/dimension **raise fail-closed** |
 | Checkpoint mất khóa `pooling` mispredict âm thầm | `load_checkpoint` warn khi thiếu khóa. Đã kiểm: checkpoint cũ → 1 cảnh báo; checkpoint mới → 0 |
 | Test pool nửa vô nghĩa: `pooled[0,4:] == zeros` mà fixture `out[:,0,4:]` cũng là zeros, nên bản `zeros_like` cũng pass | Ramp bắt đầu từ 1 → t=0 ra 10.0. Thêm `test_pool_matches_lstm_final_hidden_states` chạy trên `nn.LSTM` thật, so với `cat(h_n[0], h_n[1])` |
 | Test cache key không đổi `feature_dim`/`sequence_length` | Đã thêm hai assert |
@@ -101,7 +104,7 @@ vslr-train --data-dir <tree>      --epochs 2 --augment 2 --model-dir <tmp> --cac
 - Chạy lại ở chế độ ship: cả 12 clip báo `(cache)` với `hand_frame_ratio` **giống hệt** lần chạy MediaPipe → cache đúng và stats không mất.
 - `metrics.json` history chỉ có `epoch`/`train_loss_smoothed`/`train_accuracy` — không khóa val nào, vì không có holdout.
 - `--video --loso` → `error: Leave-one-signer-out needs clips from at least 2 different people, found ['unknown']…`
-- `load_checkpoint('models/gesture_lstm.pt')` (checkpoint cũ) hiện **raise** vì feature v1 ≠ v2; opt-in legacy mới load `legacy_last_step` kèm cảnh báo. Checkpoint mới → `fwd_last_bwd_first`, 0 cảnh báo.
+- `load_checkpoint('models/gesture_lstm.pt')` (checkpoint cũ) hiện **raise** vì feature v1 ≠ v3 và không có bypass. Checkpoint mới → `fwd_last_bwd_first`, 0 cảnh báo.
 - `--num-workers 2` trên Windows: exit 0, LOSO chạy hết 2 fold.
 - Một clip không mở được (file rác `.mov`): `SKIP` rồi `1 of 12 clips failed extraction (8.3% > 5%)`, exit 1, **`--model-dir` rỗng** — không ship gì.
 - `--epochs 0` → `argument --epochs: must be >= 1, got 0`; `--augment -1` → `must be >= 0, got -1`.
@@ -116,7 +119,7 @@ Cây tạm và file tạm đã xóa. `models/` **không** bị ghi trong quá tr
 - **`FEATURES_VERSION` phải tăng tay.** Sửa `normalize_landmarks`, trim/margin, stride, hay ngưỡng confidence mà quên tăng nó → cache trả landmark cũ và mọi số phía sau mô tả extractor cũ, không có gì báo. Checkpoint lệch version bị `load_checkpoint` chặn mặc định.
 - **`--num-workers` mặc định 0.** Augment tốn ~0,62 ms/mẫu single-thread → ~40 s/epoch ở 540 clip × 120, tức ~27 phút cho `--epochs 40` và ~2,2 h cho LOSO 5 fold (ngoại suy từ benchmark xen kẽ 250×11 vòng, chưa chạy thật ở 540 clip). Trên run thật nhớ đặt `--num-workers 4` trở lên. Seed theo vị trí nên số worker **không** đổi mẫu sinh ra.
 - **`dataset/processed/dataset_3gestures.npz` không còn được sinh ra.** File 136 MB cũ vẫn nằm trên đĩa (ignored), xóa được.
-- **Checkpoint hiện tại trong `models/` chưa được train lại.** Vẫn là model 1 epoch, pooling cũ, landmark v1; camera chặn mặc định vì code sinh landmark v2. Train lại cần quyết định của chủ dự án vì nó ghi đè artifact đang track.
+- **Checkpoint hiện tại trong `models/` chưa được train lại.** Vẫn là model 1 epoch, pooling cũ, feature v1; camera chặn mặc định vì code sinh feature v3. Train lại cần quyết định của chủ dự án vì nó ghi đè artifact đang track.
 - **`--epochs 40` là con số chọn tay, chưa tune.** Muốn tune tử tế cần inner split lồng trong từng fold.
 - **Ba artifact chỉ ghép được khi `training_signature` khớp.** Hash nằm trong LOSO report, ship metrics và config bên trong checkpoint; bao phủ data/nhãn, hyperparameter, model/augment/training recipe, device và runtime. `metrics.json.checkpoint_sha256` còn khóa đúng bytes của weights. `--loso` cố tình không xóa checkpoint cũ nên report mới vẫn có thể nằm cạnh artifact cũ; ship in `PAIR OK`/`PAIR MISMATCH` để nói rõ.
 - **Quota clip lỗi chỉ áp dụng cho lỗi nguồn đã định danh.** `ClipExtractionError`/file biến mất có thể bị bỏ rồi kiểm lại invariants; permission, MediaPipe runtime và lỗi hệ thống khác abort ngay, không được hóa thành 5% clip xấu.

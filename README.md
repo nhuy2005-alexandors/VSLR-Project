@@ -1,13 +1,14 @@
-# VSLR - 3 cử chỉ sang câu nói
+# VSLR - 30 cử chỉ sang câu nói
 
-Prototype nhận ba cử chỉ tiếng Việt `Cảm ơn`, `Chuyện gì`, `Xin chào` bằng MediaPipe + BiLSTM. Camera nhận từng cử chỉ, lưu các từ vào bộ đệm và đọc nguyên câu sau khi người dùng dừng.
+Prototype nhận 30 cử chỉ tiếng Việt bằng MediaPipe + BiLSTM. Camera nhận từng cử chỉ, lưu các từ vào bộ đệm và đọc nguyên câu sau khi người dùng dừng.
 
 ## Cấu trúc
 
 ```text
 src/prototype_3_gestures/  Source train và realtime
 tests/                     Unit tests
-dataset/raw/               27 clip train (1–9 mỗi nhãn), tên file không mã hóa người ký
+dataset/recordings_v1/     Cây quay P01–P04, 30 nhãn × 6 clip/người
+dataset/recording_plan.json Hợp đồng người và quota; không lặp danh sách nhãn
 dataset/processed/         Cache landmark per-clip, tự sinh lại được
 dataset/legacy/            Bộ từ điển VSL crawl từ bên thứ ba (4362 video / 3315 nhãn)
 models/                    Checkpoint và metadata
@@ -21,20 +22,17 @@ python -m pip install -e ".[tts]"
 
 ## Camera test
 
-Checkpoint đang track được train bằng landmark v1, còn extractor hiện tại là v2. Lệnh mặc định
+Checkpoint đang track được train bằng landmark cũ, còn extractor hiện tại là feature v3 (landmark + presence L/R). Lệnh mặc định
 **từ chối** chạy artifact không tương thích cho tới khi train lại:
 
 ```powershell
 vslr-camera --no-tts
 ```
 
-Chỉ khi cần xem tạm demo legacy và chấp nhận dự đoán không đáng tin:
-
-```powershell
-vslr-camera --no-tts --allow-incompatible-model
-```
-
-Sau khi train checkpoint v2, bỏ cờ `--allow-incompatible-model`; bật TTS bằng cách bỏ `--no-tts`.
+Không có cờ bypass cho checkpoint lệch dimension/feature contract. Sau khi train checkpoint v3
+và có reject policy calibration, chạy bình thường. Trước khi có negative/idle/OOV calibration,
+realtime fail-closed và không phát âm segment bị reject; chỉ dùng `--allow-uncalibrated` cho demo
+tạm thời.
 
 Mỗi lần múa xong một cử chỉ, hạ tay khoảng 0,45 giây. Sau cử chỉ cuối, giữ nghỉ khoảng 2,2 giây để hệ thống đọc cả câu. Phím `SPACE` chốt segment, `S` đọc ngay, `C` xóa câu, `Q` thoát.
 
@@ -43,7 +41,7 @@ Mỗi lần múa xong một cử chỉ, hạ tay khoảng 0,45 giây. Sau cử c
 **Chưa có con số accuracy nào báo cáo được.**
 
 - 27 clip nguồn, 9 clip mỗi cử chỉ. Tên file **không** mã hóa người ký, và không ai xác nhận được clip nào của người nào — nên không chạy được leave-one-signer-out trên bộ này.
-- Checkpoint trong `models/` được train bằng **pipeline cũ**, đúng 1 epoch, pooling cũ và landmark v1. Loader hiện chặn nó mặc định vì extractor sinh landmark v2. **Không** dùng artifact này để báo bất kỳ số nào.
+- Checkpoint trong `models/` được train bằng **pipeline cũ**, đúng 1 epoch, pooling cũ và feature v1. Loader hiện chặn nó vì extractor sinh feature v3. **Không** dùng artifact này để báo bất kỳ số nào.
 - Muốn có con số: quay dataset có ID người theo `docs/specs/dataset-recording.md`, rồi chạy `--loso`.
 
 ## Train
@@ -52,13 +50,13 @@ Hai chế độ, một lệnh. Chi tiết trong `docs/technical_specs/pipeline-r
 
 ```powershell
 # Kiểm cấu trúc, độ phủ và chất lượng clip trước; không train
-vslr-check --data-dir dataset/recordings_v1 --labels-file dataset/labels.txt
+vslr-check --data-dir dataset/recordings_v1
 
 # ĐO: leave-one-signer-out, ghi models/loso_report.json, KHÔNG ghi checkpoint
-vslr-train --data-dir dataset/recordings_v1 --labels-file dataset/labels.txt --loso --num-workers 4
+vslr-train --data-dir dataset/recordings_v1 --loso --num-workers 4
 
 # SẢN XUẤT: train mọi clip, ship weight cuối, KHÔNG kèm accuracy
-vslr-train --data-dir dataset/recordings_v1 --labels-file dataset/labels.txt --num-workers 4
+vslr-train --data-dir dataset/recordings_v1 --num-workers 4
 ```
 
 Các CLI tự cấu hình stdout/stderr UTF-8 trên Windows.
@@ -76,13 +74,15 @@ vslr-init-dataset --data-dir dataset/recordings_v1 --people-count 4 --clips-per-
 Kết quả là 120 thư mục nhãn và kế hoạch 720 video. Tool không tạo video rỗng, không di chuyển
 hay ghi đè clip. Lưu từng lần quay thành `001.mov` đến `006.mov` (hoặc `.mp4`) trong thư mục
 đúng nhãn. Pipeline tự lấy `person=P01` và `label=Cảm ơn` từ đường dẫn, nên không cần gán nhãn
-từng file bằng tay.
+từng file bằng tay. `recording_plan.json` là nguồn quota/người chung của init, check và train;
+file `dataset/labels.txt` vẫn là nguồn duy nhất của class order.
 
 ## Nạp video mới
 
 `--data-dir` cần cây `DIR/<người>/<cử chỉ>/*.mov`. Mỗi tên thư mục cử chỉ phải khớp
-**chính xác sau chuẩn hóa Unicode NFC** với một dòng trong `dataset/labels.txt`; thiếu một nhãn ở
-toàn bộ cây hoặc có thư mục slug ngoài manifest đều bị chặn trước khi chạy MediaPipe:
+**chính xác sau chuẩn hóa Unicode NFC** với một dòng trong `dataset/labels.txt`; cây directory mode
+phải đủ đúng P01–P04 và đúng 6 video cho mọi cặp người/nhãn. Thiếu, thừa, người ngoài plan hoặc
+hai video trùng bytes đều bị chặn trước khi chạy MediaPipe:
 
 ```text
 dataset/recordings_v1/P01/Cảm ơn/001.mov
@@ -124,3 +124,19 @@ vslr-train @trainArgs
 
 Chế độ đó gán mọi clip là cùng một người, không dùng `dataset/labels.txt` và từ chối `--loso`, nên
 chỉ phù hợp để tạo artifact thử nghiệm từ bộ legacy.
+
+## Đo ghép câu offline
+
+`vslr-sentence` dùng chính `SegmentTracker`, presence-aware preprocessing và reject policy của
+webcam. Ground truth batch nằm trong CSV `person,clip,words` (các nhãn trong `words` ngăn bằng
+`|`; để trống là negative/idle/OOV). Không có calibration âm thì lệnh ghi rõ `uncalibrated` và
+reject mặc định; dùng `--allow-uncalibrated` chỉ khi chấp nhận kết quả tạm thời.
+
+```powershell
+vslr-sentence --dir dataset/raw_sentences --manifest dataset/raw_sentences/sentences.csv --model models/gesture_lstm.pt
+vslr-sentence --clip dataset/raw_sentences/P01/cau_01.mov --expect "Xin chào|Cảm ơn" --model models/gesture_lstm.pt
+```
+
+Báo cáo batch có exact sentence accuracy, WER/edit distance, count mismatch và false accept
+trên các dòng negative. Chưa có raw negative/idle/OOV và checkpoint feature v3 để chạy metric
+thực tế trong workspace hiện tại.

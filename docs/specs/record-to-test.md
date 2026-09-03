@@ -1,6 +1,6 @@
 # Spec — Đóng khoảng cách "quay clip → test"
 
-_Viết: 2026-08-22. Rev 2 sau `spec-critic`. **Lỗ hổng 1 và 2 đã làm; lỗ hổng 3 còn pending.** Các câu trả lời blocker dưới đây đã được gộp vào requirement tương ứng._
+_Viết: 2026-08-22. Rev 3: hardening + `vslr-sentence` đã triển khai 2026-08-28. Các câu trả lời blocker dưới đây đã được gộp vào requirement tương ứng._
 
 ## Kết quả cổng spec-critic — 5 blocker và câu trả lời
 
@@ -25,7 +25,8 @@ Sau buổi quay, người dùng chỉ chạy lệnh — không viết thêm code
 2. **Sau khi quay đủ**: một con số kèm **nhãn nào sai** và **clip nào sai**, đủ để quyết định làm gì tiếp.
 3. **Cho mục tiêu thật của dự án**: câu ghép từ clip câu có đúng không, đo được, không cần camera.
 
-Lỗ hổng 1 và 2 đã đóng. Lỗ hổng 3 (đo câu offline) vẫn là phần còn lại của spec.
+Lỗ hổng 1, 2 và 3 đã có code. Việc còn lại là quay dữ liệu thật và chạy các phép đo; không được coi
+unit/synthetic tests là accuracy của người mới.
 
 ## Lỗ hổng 1: không có lệnh nghiệm thu tại chỗ quay — **ĐÃ LÀM** (`vslr-check`)
 
@@ -66,21 +67,22 @@ Ràng buộc: `predictions[]` ở 540 clip × 5 fold = 540 dòng (mỗi clip tes
 
 ## Lỗ hổng 3: mục tiêu của dự án là câu, mà không có gì đo câu
 
-Mục tiêu là "múa từ từ thành câu hoàn chỉnh". Pipeline chỉ đo **một clip một nhãn**. `dataset/raw_sentences/` trong spec quay **không có code nào đọc**. Ghép câu chỉ tồn tại trong `realtime.py`, không test, không số.
+Mục tiêu là "múa từ từ thành câu hoàn chỉnh". Pipeline train vẫn đo clip một nhãn; `vslr-sentence`
+đã bổ sung phép đo offline cho câu ghép. Metric thật còn chờ dữ liệu câu/checkpoint v3.
 
 Tức phần được đo và phần được demo là hai thứ khác nhau — đúng lỗi mà repo tham chiếu `photienanh/Vietnamese-Sign-Language-Recognition` mắc phải (demo trông mượt vì không bao giờ nói "không biết", và không có con số nào tồn tại).
 
 ### `vslr-sentence --clip path.mov [--expect "Xin chào,Cảm ơn"]`
 
-- [ ] Entry point mới → `prototype_3_gestures.sentence:main`.
-- [ ] Đọc video bằng `HolisticExtractor.process_frame` từng frame, dựng `now` từ số frame và FPS của file (không dùng `time.monotonic` — đây là offline, phải tái lập được).
-- [ ] Đưa qua **chính** `SegmentTracker` mà `realtime.py` dùng, cùng `--word-gap` / `--max-seconds` / `--min-seconds`, rồi `classify_segment` + `should_accept_prediction`. Không được nhân bản logic.
-- [ ] In từng segment: `frame bắt đầu–kết thúc | nhãn | confidence | nhận/loại`, rồi câu ghép cuối.
-- [ ] `--expect` cho danh sách từ mong đợi → in khớp/lệch và exit 1 nếu lệch. Đây là thứ biến demo thành test.
-- [ ] `--dir DIR` chạy cả thư mục clip câu và in tổng: bao nhiêu câu đúng hoàn toàn, bao nhiêu sai một từ, bao nhiêu sai số lượng từ.
-- [ ] `--model PATH` bắt buộc/hoặc có default rõ; từ trong `--expect`/manifest phải là tập con của labels trong checkpoint.
-- [ ] Chạy batch đọc ground truth từ `dataset/raw_sentences/sentences.csv` (`person,clip,words`), không suy nội dung từ filename.
-- [ ] Refactor phần lọc min-duration, confidence và ghép câu khỏi closure trong `realtime.main()` để offline và camera gọi cùng một implementation.
+- [x] Entry point mới → `prototype_3_gestures.sentence:main`.
+- [x] Đọc video bằng `HolisticExtractor.process_frame` từng frame, dựng `now` từ số frame và FPS của file (không dùng `time.monotonic` — đây là offline, phải tái lập được).
+- [x] Đưa qua **chính** `SegmentTracker` mà `realtime.py` dùng, cùng `--word-gap` / `--max-seconds` / `--min-seconds`, rồi shared classifier/reject decision. Không nhân bản logic biên.
+- [x] In từng segment: `frame bắt đầu–kết thúc | nhãn | confidence | nhận/loại`, rồi câu ghép cuối.
+- [x] `--expect` cho danh sách từ mong đợi → in khớp/lệch và exit 1 nếu lệch.
+- [x] `--dir DIR` chạy thư mục clip câu và in tổng exact/WER/edit/count mismatch/false accept.
+- [x] `--model PATH` có default rõ; từ trong `--expect`/manifest là tập con labels checkpoint.
+- [x] Chạy batch đọc ground truth từ `dataset/raw_sentences/sentences.csv` (`person,clip,words`), không suy nội dung từ filename.
+- [x] Refactor phần lọc min-duration, confidence/reject và ghép câu khỏi closure trong `realtime.main()` để offline/camera dùng cùng SegmentTracker + decision.
 
 Cái này cũng là cách duy nhất hiện có để **đo `--confidence` / `--word-gap` bằng dữ liệu** thay vì bốc số: chạy lại cùng bộ clip câu ở vài giá trị ngưỡng rồi xem cái nào ghép đúng nhiều nhất.
 
@@ -120,13 +122,13 @@ Chạy được đúng chuỗi này, không sửa code ở giữa:
 
 ```powershell
 # 1. quay P1 xong, kiem ngay tai cho
-vslr-check --data-dir dataset/raw --labels-file dataset/labels.txt --min-hand-ratio 0.5
+vslr-check --data-dir dataset/recordings_v1 --min-hand-ratio 0.5
 
 # 2. quay du 5 nguoi -> do
-vslr-train --data-dir dataset/raw --labels-file dataset/labels.txt --loso --num-workers 4
+vslr-train --data-dir dataset/recordings_v1 --loso --num-workers 4
 
 # 3. san xuat artifact de demo
-vslr-train --data-dir dataset/raw --labels-file dataset/labels.txt --num-workers 4
+vslr-train --data-dir dataset/recordings_v1 --num-workers 4
 
 # 4. do phan ghep cau
 vslr-sentence --dir dataset/raw_sentences --manifest dataset/raw_sentences/sentences.csv --model models/gesture_lstm.pt

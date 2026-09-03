@@ -1,6 +1,6 @@
 # As-built — Sửa segmentation realtime + time warp augmentation
 
-_Xong: 2026-08-22. Test: **35 passed** (5/5 mutation của segmentation bị bắt). Đã qua một vòng `reviewer`: BLOCKED → 2 blocker + 6 should-fix, đã xử lý hết. Không có spec riêng: hai việc này đều nằm ở mục Out of scope của `docs/specs/pipeline-restructure.md`._
+_Xong: 2026-08-22; hardening cập nhật 2026-08-28. Contract hiện hành: timestamp + presence-aware feature v3; xem `docs/technical_specs/pipeline-hardening.md`._
 
 ## Bug đã sửa: một cử chỉ ra hai từ
 
@@ -75,7 +75,7 @@ Audit tìm ra một lỗi trong pipeline **đã commit** trước đó: landmark
 
 ## Ngưỡng đổi từ frame sang giây
 
-`--max-frames`/`--min-frames` đã thành `--max-seconds` (5,0) / `--min-seconds` (0,35), và `SegmentTracker.feed` trả về một `Segment` mang `start_time`/`end_time`/`forced` thay vì một list trần.
+`--max-frames`/`--min-frames` đã thành `--max-seconds` (5,0) / `--min-seconds` (0,35), và `SegmentTracker.feed` trả về một `Segment` mang `start_time`/`end_time`/`forced` cùng presence/timestamp tracks. Mọi max-boundary đều chờ hand drop trước khi mở gesture tiếp theo.
 
 Sửa audit sau đó: `end_time` là lúc `word_gap` hết nên không được dùng làm độ dài active. `Segment` hiện có thêm `active_end_time`; `duration = active_end_time - start_time`. Một frame thấy tay không còn tự vượt `min_seconds` chỉ vì chờ 0,45 giây để đóng biên.
 

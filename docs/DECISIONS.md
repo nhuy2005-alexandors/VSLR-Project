@@ -74,7 +74,7 @@ Quyết định kiến trúc + LÝ DO. Tích lũy, không xóa.
 
 - **Date**: 2026-08-22
 - **Context**: checkpoint v1 nhận tensor đúng shape từ extractor v2 nên PyTorch không báo, nhưng phân phối landmark khác và chính loader biết predictions không đáng tin. Warning vẫn cho phép demo tiếp tục như thể hợp lệ.
-- **Decision**: `load_checkpoint` raise mặc định khi `features_version` khác (thiếu khóa = v1). `vslr-camera --allow-incompatible-model` là opt-in tường minh chỉ cho demo legacy tạm thời; checkpoint mới v2 chạy không cần cờ.
+- **Decision**: `load_checkpoint` raise khi `features_version`, feature contract hoặc input dimension khác (thiếu khóa = v1). Bỏ hoàn toàn bypass incompatible vì checkpoint cũ 201 chiều không thể nhận feature v3 203 chiều một cách đáng tin; realtime/sentence không quảng cáo đường fallback.
 - **Trade-offs**: `vslr-camera --no-tts` trên clean checkout hiện bị chặn cho tới khi chủ dự án cho phép train lại artifact. Không tự ghi đè model đang track.
 
 ## ADR-010: Pair accuracy bằng hợp đồng ba artifact, không chỉ hai JSON

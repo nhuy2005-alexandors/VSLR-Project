@@ -18,7 +18,8 @@ from .prepare_train import (
     Clip,
     discover_clips,
     label_order,
-    non_negative_int,
+    positive_int,
+    validate_recording_tree,
 )
 from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import HolisticExtractor
@@ -27,6 +28,11 @@ from .vsl3.labels import (
     normalise_label,
     normalised_label_directories,
     read_expected_labels,
+)
+from .vsl3.recording_plan import (
+    DEFAULT_RECORDING_PLAN_FILE,
+    load_recording_plan,
+    resolve_labels_file,
 )
 
 configure_utf8_stdio()
@@ -50,9 +56,14 @@ def clip_status(stats: dict | None, error: Exception | None, min_hand_ratio: flo
     return "QUAY LAI" if stats["hand_frame_ratio"] < min_hand_ratio else "ok"
 
 
-def coverage_gaps(clips: list[Clip], expected_labels: list[str], expected_per_label: int) -> dict:
+def coverage_gaps(
+    clips: list[Clip],
+    expected_labels: list[str],
+    expected_per_label: int,
+    expected_people: list[str] | tuple[str, ...] | None = None,
+) -> dict:
     """Cặp (người, nhãn) chưa có clip nào, cặp còn thiếu clip, và nhãn ngoài danh sách."""
-    people = sorted({clip.person for clip in clips})
+    people = sorted(set(expected_people or ()) | {clip.person for clip in clips})
     counts: dict[tuple[str, str], int] = {}
     for clip in clips:
         key = (clip.person, normalise_label(clip.label))
@@ -67,7 +78,10 @@ def coverage_gaps(clips: list[Clip], expected_labels: list[str], expected_per_la
         if 0 < counts.get((person, label), 0) < expected_per_label
     ]
     unexpected = [label for label in label_order(clips) if normalise_label(label) not in expected]
-    return {"missing": sorted(missing), "short": sorted(short), "unexpected": sorted(unexpected)}
+    result = {"missing": sorted(missing), "short": sorted(short), "unexpected": sorted(unexpected)}
+    if expected_people is not None:
+        result["unexpected_people"] = sorted({clip.person for clip in clips} - set(expected_people))
+    return result
 
 
 def find_skipped_dirs(data_dir: str | Path) -> list[Path]:
@@ -107,7 +121,10 @@ def build_parser() -> argparse.ArgumentParser:
         "Cờ tường minh, không đoán theo cấu trúc — đoán sai là biến tên nhãn thành tên người.",
     )
     parser.add_argument("--labels-file", default=DEFAULT_LABELS_FILE, help="Danh sách nhãn mong đợi")
-    parser.add_argument("--clips-per-label", type=non_negative_int, default=6)
+    parser.add_argument("--recording-plan", default=DEFAULT_RECORDING_PLAN_FILE, help="Hợp đồng quay V1")
+    # Keep the established help/API default for callers that inspect the parser; directory mode
+    # still takes the authoritative value from recording_plan.json.
+    parser.add_argument("--clips-per-label", type=positive_int, default=6)
     parser.add_argument("--min-hand-ratio", type=float, default=0.5)
     parser.add_argument("--cache-dir", default="dataset/processed/landmark_cache", help="Dùng chung với vslr-train")
     return parser
@@ -120,13 +137,25 @@ def main() -> None:
     if not 0.0 < args.min_hand_ratio <= 1.0:
         build_parser().error(f"--min-hand-ratio phải trong (0, 1], nhận {args.min_hand_ratio}")
 
+    plan = None
+    manifest_path = Path(args.labels_file)
     try:
-        expected_labels = read_expected_labels(args.labels_file)
+        if not args.person:
+            plan = load_recording_plan(args.recording_plan)
+            if args.labels_file == DEFAULT_LABELS_FILE:
+                manifest_path = resolve_labels_file(args.recording_plan, plan)
+        expected_labels = read_expected_labels(manifest_path)
+        if plan is not None and args.clips_per_label not in (6, plan.clips_per_label):
+            raise ValueError(
+                f"--clips-per-label={args.clips_per_label} khác recording plan ({plan.clips_per_label})"
+            )
     except (OSError, ValueError) as exc:
         raise SystemExit(
-            f"error: không đọc được manifest nhãn bắt buộc {args.labels_file}: {exc}. "
+            f"error: không đọc được hợp đồng/manifest bắt buộc {manifest_path}: {exc}. "
             "Không thể xác nhận độ phủ nếu thiếu danh sách nhãn."
         ) from exc
+
+    clips_per_label = plan.clips_per_label if plan is not None else args.clips_per_label
 
     data_dir = Path(args.data_dir)
     if not args.person and data_dir.is_dir():
@@ -139,31 +168,65 @@ def main() -> None:
         clips = (
             discover_single_person(data_dir, args.person)
             if args.person
-            else discover_clips(data_dir)
+            else discover_clips(data_dir, allow_empty=True)
         )
     except (ValueError, NotADirectoryError) as exc:
         raise SystemExit(f"error: {exc}") from exc
 
+    contract_errors: list[str] = []
+    if plan is not None:
+        try:
+            tree = validate_recording_tree(data_dir, plan, expected_labels, strict_counts=False)
+            contract_errors = list(tree.errors)
+        except (OSError, ValueError) as exc:
+            contract_errors = [str(exc)]
+        for error in contract_errors:
+            print(f"HỢP ĐỒNG LỖI: {error}")
+
+    if contract_errors:
+        # Structural/leakage failures are deterministic and must not spend time opening any video
+        # or make a corrupt tree look like a camera-quality problem.
+        _print_report(
+            [],
+            clips,
+            expected_labels,
+            args,
+            clips_per_label,
+            plan.people if plan else None,
+            manifest_path,
+            contract_errors,
+        )
+
     print(f"\nKiểm {len(clips)} clip (cache: {args.cache_dir})\n")
     rows: list[tuple[str, Clip, dict | None, str | None]] = []
     cache_dir = Path(args.cache_dir)
-    with HolisticExtractor() as extractor:
-        for position, clip in enumerate(clips, start=1):
-            try:
-                _, stats = extract_with_cache(clip, extractor, cache_dir)
-                status = clip_status(stats, None, args.min_hand_ratio)
-                error_text = None
-            except Exception as exc:
-                stats, status = None, clip_status(None, exc, args.min_hand_ratio)
-                error_text = f"{type(exc).__name__}: {exc}"
-            rows.append((status, clip, stats, error_text))
-            detail = f" | {error_text}" if error_text else ""
-            print(f"  [{position}/{len(clips)}] {status:15s} {clip.person}/{clip.label}/{clip.path.name}{detail}")
+    if clips:
+        with HolisticExtractor() as extractor:
+            for position, clip in enumerate(clips, start=1):
+                try:
+                    _, stats = extract_with_cache(clip, extractor, cache_dir)
+                    status = clip_status(stats, None, args.min_hand_ratio)
+                    error_text = None
+                except Exception as exc:
+                    stats, status = None, clip_status(None, exc, args.min_hand_ratio)
+                    error_text = f"{type(exc).__name__}: {exc}"
+                rows.append((status, clip, stats, error_text))
+                detail = f" | {error_text}" if error_text else ""
+                print(f"  [{position}/{len(clips)}] {status:15s} {clip.person}/{clip.label}/{clip.path.name}{detail}")
 
-    _print_report(rows, clips, expected_labels, args)
+    _print_report(rows, clips, expected_labels, args, clips_per_label, plan.people if plan else None, manifest_path, contract_errors)
 
 
-def _print_report(rows, clips: list[Clip], expected_labels: list[str], args) -> None:
+def _print_report(
+    rows,
+    clips: list[Clip],
+    expected_labels: list[str],
+    args,
+    clips_per_label: int,
+    expected_people=None,
+    manifest_path: Path | None = None,
+    contract_errors: list[str] | None = None,
+) -> None:
     ok = [r for r in rows if r[0] == "ok"]
     bad = [r for r in rows if r[0] != "ok"]
 
@@ -195,25 +258,27 @@ def _print_report(rows, clips: list[Clip], expected_labels: list[str], args) -> 
         print("  KHONG MO DUOC = lỗi file/truyền. QUA NGAN / KHONG THAY TAY / QUAY LAI = quay lại.")
         print("  LOI HE THONG = không quay lại; sửa lỗi quyền/cache/phần mềm ghi ngay dưới clip.")
 
-    gaps = coverage_gaps(clips, expected_labels, args.clips_per_label)
-    people = sorted({c.person for c in clips})
+    gaps = coverage_gaps(clips, expected_labels, clips_per_label, expected_people)
+    people = sorted(set(expected_people or ()) | {c.person for c in clips})
     print(
-        f"\nĐộ phủ: {len(people)} người × {len(expected_labels)} nhãn × {args.clips_per_label} clip "
-        f"= {len(people) * len(expected_labels) * args.clips_per_label} clip mong đợi"
+        f"\nĐộ phủ: {len(people)} người × {len(expected_labels)} nhãn × {clips_per_label} clip "
+        f"= {len(people) * len(expected_labels) * clips_per_label} clip mong đợi"
     )
     if gaps["unexpected"]:
-        print(f"  Nhãn KHÔNG có trong {args.labels_file}: {gaps['unexpected']}")
+        print(f"  Nhãn KHÔNG có trong {manifest_path or args.labels_file}: {gaps['unexpected']}")
+    if gaps.get("unexpected_people"):
+        print(f"  Người ngoài recording plan: {gaps['unexpected_people']}")
     if gaps["missing"]:
         print(f"  Chưa có clip nào ({len(gaps['missing'])} cặp): {gaps['missing'][:12]}")
         if len(gaps["missing"]) > 12:
             print(f"    ... và {len(gaps['missing']) - 12} cặp nữa")
     if gaps["short"]:
-        print(f"  Còn thiếu clip ({len(gaps['short'])} cặp, cần {args.clips_per_label}): {gaps['short'][:12]}")
+        print(f"  Còn thiếu clip ({len(gaps['short'])} cặp, cần {clips_per_label}): {gaps['short'][:12]}")
     if not any(gaps.values()):
         print("  Đủ.")
 
     incomplete = any(gaps.values())
-    if problems or incomplete:
+    if problems or incomplete or contract_errors:
         raise SystemExit(1)
     print("\nTất cả clip đạt và đủ độ phủ.")
 

@@ -49,9 +49,9 @@ Bẫy đã gặp. Tích lũy, không xóa. Gặp bẫy mới → append.
 
 ## Bump `FEATURES_VERSION` tạo ra đúng cái mismatch âm thầm mà nó tồn tại để chặn
 
-- **Symptom**: sau khi bump `FEATURES_VERSION` 1 → 2, load `models/gesture_lstm.pt` chỉ ra **một** cảnh báo (về `pooling`), không cảnh báo nào về landmark — dù checkpoint đó được train trên landmark v1 và extractor hiện tại sinh v2.
+- **Symptom lịch sử**: sau khi bump `FEATURES_VERSION` 1 → 2, load `models/gesture_lstm.pt` chỉ ra **một** cảnh báo (về `pooling`), không cảnh báo nào về landmark — dù checkpoint đó được train trên landmark v1 và extractor lúc đó sinh v2. Hiện contract đã lên v3 với presence channels.
 - **Cause**: `load_checkpoint` viết `if stored is not None and stored != FEATURES_VERSION`. Checkpoint cũ **không có** khóa `features_version` (nó ra đời trước khóa đó), nên `stored is None` và phép so sánh bị bỏ qua hoàn toàn. Tức đúng những artifact dễ cũ nhất là những artifact được miễn kiểm.
-- **Avoidance/fix**: thiếu khóa nghĩa là "viết trước khi có khóa" = **version 1**, không phải "không cần kiểm". `int(config.get("features_version", 1))`. Lệch version giờ **raise mặc định**; chỉ `allow_incompatible_features=True` / `--allow-incompatible-model` mới đi tiếp kèm cảnh báo. Cùng logic với `pooling` thiếu → `legacy_last_step`.
+- **Avoidance/fix**: thiếu khóa nghĩa là "viết trước khi có khóa" = **version 1**, không phải "không cần kiểm". `int(config.get("features_version", 1))`. Lệch version/dimension giờ **raise luôn**, không có bypass vì checkpoint cũ không tương thích với feature v3. Cùng logic với `pooling` thiếu → `legacy_last_step`.
 - **Bài học rộng hơn**: mỗi lần thêm một khóa metadata để phát hiện lệch, phải quyết **giá trị mặc định cho artifact chưa có khóa đó** ngay trong cùng lần sửa. Mặc định `None` + `is not None` là cách tự vô hiệu hóa cái guard vừa viết.
 
 ## Benchmark trên CPU chưa nguội cho số sai gấp 2–3 lần

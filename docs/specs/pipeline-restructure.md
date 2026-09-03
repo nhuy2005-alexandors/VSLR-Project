@@ -1,5 +1,8 @@
 # Spec — Tái cấu trúc pipeline train
 
+> Contract directory hiện hành dùng `dataset/recording_plan.json` + `dataset/recordings_v1` và
+> feature v3; xem `docs/specs/pipeline-hardening.md` cho các invariant mới.
+
 _Viết: 2026-08-22. Rev 2 sau `spec-critic` (verdict rev 1: BLOCKED — 5 blocker / 9 should-fix). **Đã implement**; as-built ở `docs/technical_specs/pipeline-restructure.md` và `video-ingest-readiness.md`._
 
 ## Goal

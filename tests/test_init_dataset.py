@@ -16,17 +16,13 @@ from prototype_3_gestures.vsl3.labels import read_expected_labels
 
 
 EXPECTED_LABELS = [
-    "Bạn cảm thấy thế nào",
     "Bạn có cần giúp đỡ không",
     "Bạn có vấn đề gì không",
     "Bạn đang làm gì",
-    "Bạn có mệt không",
     "Bạn quê ở đâu",
     "Bạn tên gì",
     "Cảm ơn",
     "Chuyện gì",
-    "Công viên",
-    "Cứu tôi với",
     "Đi đâu",
     "Được không",
     "Gọi xe cứu thương",
@@ -34,8 +30,6 @@ EXPECTED_LABELS = [
     "Hôm nay bạn khỏe không",
     "Lâu rồi không gặp",
     "Mấy tuổi",
-    "Nhà bạn có mấy người",
-    "Nhà bạn ở đâu",
     "Như thế nào",
     "Rất vui được gặp bạn",
     "Sao thế",
@@ -43,6 +37,7 @@ EXPECTED_LABELS = [
     "Tạm biệt",
     "Tôi bình thường",
     "Tôi không khỏe",
+    "Tôi khỏe",
     "Về nhà cẩn thận",
     "Xin chào",
     "Xin lỗi",
@@ -50,7 +45,7 @@ EXPECTED_LABELS = [
 
 
 class InitDatasetTests(unittest.TestCase):
-    def test_project_manifest_is_the_final_30_label_v1(self):
+    def test_project_manifest_is_the_final_25_label_v1(self):
         root = Path(__file__).resolve().parents[1]
         self.assertEqual(read_expected_labels(root / "dataset" / "labels.txt"), EXPECTED_LABELS)
 

@@ -1,19 +1,15 @@
-# VSLR dataset V1 — 30 nhãn đã chốt, một nhãn mỗi dòng.
+# VSLR dataset V1 — 25 nhãn đã chốt, một nhãn mỗi dòng.
 # Thứ tự dòng là class index; không đổi thứ tự sau khi đã train.
 # Tên thư mục phải khớp chính xác sau chuẩn hóa Unicode NFC:
 #     dataset/recordings_v1/P01/Cảm ơn/001.mov
 
-Bạn cảm thấy thế nào
 Bạn có cần giúp đỡ không
 Bạn có vấn đề gì không
 Bạn đang làm gì
-Bạn có mệt không
 Bạn quê ở đâu
 Bạn tên gì
 Cảm ơn
 Chuyện gì
-Công viên
-Cứu tôi với
 Đi đâu
 Được không
 Gọi xe cứu thương
@@ -21,8 +17,6 @@ Hẹn gặp lại
 Hôm nay bạn khỏe không
 Lâu rồi không gặp
 Mấy tuổi
-Nhà bạn có mấy người
-Nhà bạn ở đâu
 Như thế nào
 Rất vui được gặp bạn
 Sao thế
@@ -30,6 +24,7 @@ Siêu thị
 Tạm biệt
 Tôi bình thường
 Tôi không khỏe
+Tôi khỏe
 Về nhà cẩn thận
 Xin chào
 Xin lỗi

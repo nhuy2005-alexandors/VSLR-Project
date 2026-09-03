@@ -19,11 +19,18 @@ from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import (
     AUGMENTATION_VERSION,
     FEATURE_DIM,
+    FEATURE_CONTRACT,
     FEATURES_VERSION,
     SEQUENCE_LENGTH,
     ClipExtractionError,
     HolisticExtractor,
     augment_sequence,
+)
+from .vsl3.recording_plan import (
+    DEFAULT_RECORDING_PLAN_FILE,
+    RecordingPlan,
+    load_recording_plan,
+    resolve_labels_file,
 )
 from .vsl3.labels import (
     DEFAULT_LABELS_FILE,
@@ -45,6 +52,8 @@ SINGLE_SIGNER = "unknown"
 VIDEO_SUFFIXES = {".mov", ".mp4"}
 MAX_FAILED_CLIP_RATIO = 0.05
 TRAINING_RECIPE_VERSION = 1
+REJECTION_CONTRACT = "closed-set-reject-v1-calibration-only"
+SEGMENTATION_CONTRACT = "timestamp-segment-v2-min-active-no-tail"
 TRAIN_LABEL_SMOOTHING = 0.03
 OPTIMIZER_WEIGHT_DECAY = 1e-4
 TRAINING_SIGNATURE_FIELDS = (
@@ -61,6 +70,10 @@ TRAINING_SIGNATURE_FIELDS = (
     "training_recipe_version",
     "sequence_length",
     "feature_dim",
+    "feature_contract",
+    "rejection_contract",
+    "segmentation_contract",
+    "recording_plan",
     "model",
     "optimizer",
     "loss",
@@ -78,7 +91,128 @@ class Clip:
     path: Path
 
 
-def discover_clips(data_dir: str | Path) -> list[Clip]:
+@dataclass(frozen=True)
+class RecordingTreeValidation:
+    """Structural result produced before MediaPipe is allowed to start."""
+
+    errors: tuple[str, ...]
+    content_hashes: dict[str, tuple[Path, ...]]
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors
+
+
+def validate_recording_tree(
+    data_dir: str | Path,
+    plan: RecordingPlan,
+    expected_labels: list[str],
+    *,
+    strict_counts: bool = True,
+) -> RecordingTreeValidation:
+    """Validate the signer/label tree and duplicate bytes without opening any video.
+
+    ``strict_counts=False`` is used by the at-the-place recording checker: empty and short pairs
+    are expected while recording, but unknown signers/labels, overfull pairs and exact duplicate
+    content are still errors. Train and ship always use strict mode.
+    """
+
+    root = Path(data_dir)
+    errors: list[str] = []
+    hashes: dict[str, list[Path]] = {}
+    expected = [normalise_label(label) for label in expected_labels]
+    expected_set = set(expected)
+    expected_people = set(plan.people)
+    if not root.is_dir():
+        return RecordingTreeValidation((f"--data-dir is not a directory: {root}",), {})
+
+    actual_people = {path.name for path in root.iterdir() if path.is_dir()}
+    unexpected_people = sorted(actual_people - expected_people)
+    missing_people = sorted(expected_people - actual_people)
+    if unexpected_people:
+        errors.append(
+            f"person directories outside recording plan: {unexpected_people}; "
+            "do not mix legacy/unknown signers into V1"
+        )
+    if missing_people and strict_counts:
+        errors.append(f"missing person directories from recording plan: {missing_people}")
+    if strict_counts and actual_people != expected_people:
+        errors.append(
+            f"recording plan requires exactly {len(expected_people)} people {list(plan.people)}, "
+            f"found {len(actual_people)} {sorted(actual_people)}"
+        )
+
+    for person in plan.people:
+        person_dir = root / person
+        if not person_dir.is_dir():
+            continue
+        try:
+            label_dirs = normalised_label_directories(person_dir)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        actual_labels = {label for _, label in label_dirs}
+        unknown = sorted(actual_labels - expected_set)
+        if unknown:
+            errors.append(f"{person_dir} has gesture directories outside labels manifest: {unknown}")
+        by_label = {label: directory for directory, label in label_dirs}
+        for label in expected:
+            label_dir = by_label.get(label)
+            paths = (
+                sorted(
+                    path
+                    for path in label_dir.iterdir()
+                    if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
+                )
+                if label_dir is not None
+                else []
+            )
+            count = len(paths)
+            if strict_counts and count != plan.clips_per_label:
+                state = "missing" if count < plan.clips_per_label else "overfull"
+                errors.append(
+                    f"{person}/{label}: {state} {count} video(s), expected exactly "
+                    f"{plan.clips_per_label}"
+                )
+            elif not strict_counts and count > plan.clips_per_label:
+                errors.append(
+                    f"{person}/{label}: overfull {count} video(s), expected at most "
+                    f"{plan.clips_per_label}"
+                )
+            for path in paths:
+                digest = file_sha256(path)
+                hashes.setdefault(digest, []).append(path.resolve())
+
+    duplicate_groups = [paths for paths in hashes.values() if len(paths) > 1]
+    for paths in sorted(duplicate_groups, key=lambda group: [path.as_posix() for path in group]):
+        errors.append(
+            "duplicate video content/hash detected; every path must be a distinct recording: "
+            + " <-> ".join(str(path) for path in sorted(paths))
+        )
+    return RecordingTreeValidation(
+        tuple(dict.fromkeys(errors)),
+        {digest: tuple(sorted(paths)) for digest, paths in hashes.items()},
+    )
+
+
+def load_directory_contract(
+    data_dir: str | Path,
+    plan_path: str | Path,
+    labels_file: str | Path | None,
+) -> tuple[RecordingPlan, list[str], Path]:
+    """Load plan and labels before discovery/extraction; shared by train and check callers."""
+
+    plan = load_recording_plan(plan_path)
+    manifest_path = (
+        Path(labels_file).resolve()
+        if labels_file is not None
+        else resolve_labels_file(plan_path, plan)
+    )
+    labels = read_expected_labels(manifest_path)
+    return plan, labels, manifest_path
+
+
+def discover_clips(data_dir: str | Path, *, allow_empty: bool = False) -> list[Clip]:
     """Scan DIR/<person>/<gesture>/*.mov|*.mp4.
 
     The gesture directory name IS the label and goes straight into labels.json and the spoken
@@ -101,7 +235,7 @@ def discover_clips(data_dir: str | Path) -> list[Clip]:
                         )
                     )
 
-    if not clips:
+    if not clips and not allow_empty:
         raise ValueError(
             f"No .mov/.mp4 clips under {data_dir}. Expected layout DIR/<person>/<gesture>/*.mov"
         )
@@ -193,6 +327,44 @@ def validate_expected_labels(clips: list[Clip], expected_labels: list[str]) -> N
         )
 
 
+def validate_plan_clips(clips: list[Clip], plan: RecordingPlan, expected_labels: list[str]) -> None:
+    """Validate exact surviving coverage after extraction failures, without touching MediaPipe."""
+
+    expected = [normalise_label(label) for label in expected_labels]
+    expected_people = set(plan.people)
+    actual_people = {clip.person for clip in clips}
+    errors: list[str] = []
+    if actual_people != expected_people:
+        errors.append(
+            f"after extraction, people do not match plan: expected {list(plan.people)}, "
+            f"found {sorted(actual_people)}"
+        )
+    for person in plan.people:
+        for label in expected:
+            count = sum(clip.person == person and normalise_label(clip.label) == label for clip in clips)
+            if count != plan.clips_per_label:
+                state = "missing" if count < plan.clips_per_label else "overfull"
+                errors.append(
+                    f"after extraction {person}/{label}: {state} {count} clip(s), expected exactly "
+                    f"{plan.clips_per_label}"
+                )
+    if errors:
+        raise ValueError("Recording plan coverage failed: " + "; ".join(errors))
+
+
+def duplicate_content_errors(clips: list[Clip]) -> list[str]:
+    """Return exact byte-duplicate groups, including every path in each group."""
+
+    by_hash: dict[str, list[Path]] = {}
+    for clip in clips:
+        by_hash.setdefault(file_sha256(clip.path), []).append(clip.path.resolve())
+    return [
+        "duplicate video content/hash detected: " + " <-> ".join(str(path) for path in sorted(paths))
+        for paths in sorted(by_hash.values(), key=lambda group: [path.as_posix() for path in group])
+        if len(paths) > 1
+    ]
+
+
 def missing_labels_after_drop(expected_labels: list[str], surviving_clips: list[Clip]) -> list[str]:
     """Labels that lost every single clip.
 
@@ -261,6 +433,13 @@ def data_fingerprint(clips: list[Clip]) -> str:
 
 def training_signature(metadata: dict) -> str:
     """Hash every input that makes LOSO and ship training procedures comparable."""
+    # Keep callers that build the pre-hardening metadata shape usable in tests/tools while making
+    # every real run explicit about the new presence-aware feature contract.
+    metadata = dict(metadata)
+    metadata.setdefault("feature_contract", FEATURE_CONTRACT)
+    metadata.setdefault("rejection_contract", REJECTION_CONTRACT)
+    metadata.setdefault("segmentation_contract", SEGMENTATION_CONTRACT)
+    metadata.setdefault("recording_plan", {})
     missing = [field for field in TRAINING_SIGNATURE_FIELDS if field not in metadata]
     if missing:
         raise ValueError(f"Cannot build training signature; missing fields: {missing}")
@@ -308,6 +487,15 @@ def run_metadata(args, clips: list[Clip], labels: list[str], people: list[str], 
         "num_workers": args.num_workers,
         "pooling": POOLING_FWD_LAST_BWD_FIRST,
         "features_version": FEATURES_VERSION,
+        "feature_contract": FEATURE_CONTRACT,
+        "rejection_contract": REJECTION_CONTRACT,
+        "segmentation_contract": SEGMENTATION_CONTRACT,
+        "reject_policy": {
+            "schema_version": 1,
+            "calibrated": False,
+            "source": "not-calibrated",
+        },
+        "recording_plan": getattr(args, "recording_plan_metadata", {"mode": "legacy"}),
         "augmentation_version": AUGMENTATION_VERSION,
         "training_recipe_version": TRAINING_RECIPE_VERSION,
         "sequence_length": SEQUENCE_LENGTH,
@@ -344,6 +532,9 @@ def _write_cache_entry(cached: Path, sequence: np.ndarray, stats: dict) -> None:
                 sampled_frames=stats["sampled_frames"],
                 trimmed_frames=stats["trimmed_frames"],
                 hand_frame_ratio=stats["hand_frame_ratio"],
+                left_hand_frame_ratio=stats.get("left_hand_frame_ratio", stats["hand_frame_ratio"]),
+                right_hand_frame_ratio=stats.get("right_hand_frame_ratio", stats["hand_frame_ratio"]),
+                fps=stats.get("fps", 0.0),
             )
         staging.replace(cached)
     except OSError as exc:
@@ -352,6 +543,18 @@ def _write_cache_entry(cached: Path, sequence: np.ndarray, stats: dict) -> None:
             staging.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _atomic_write_text(path: str | Path, text: str) -> None:
+    """Publish JSON/text artifacts only after the complete payload is on disk."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        staging.write_text(text, encoding="utf-8")
+        staging.replace(path)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _cache_scalar(data, name: str):
@@ -386,10 +589,27 @@ def _read_cache_entry(cached: Path) -> tuple[np.ndarray, dict]:
         if not np.isfinite(hand_ratio) or not 0.10 <= hand_ratio <= 1.0:
             raise ValueError(f"invalid cached hand_frame_ratio={hand_ratio}")
 
+        def optional_ratio(name: str) -> float:
+            if name not in data:
+                return hand_ratio
+            ratio = float(_cache_scalar(data, name))
+            if not np.isfinite(ratio) or not 0.0 <= ratio <= 1.0:
+                raise ValueError(f"invalid cached {name}={ratio}")
+            return ratio
+
+        left_ratio = optional_ratio("left_hand_frame_ratio")
+        right_ratio = optional_ratio("right_hand_frame_ratio")
+        fps = float(_cache_scalar(data, "fps")) if "fps" in data else 0.0
+        if not np.isfinite(fps) or fps < 0.0:
+            raise ValueError(f"invalid cached fps={fps}")
+
     return sequence, {
         "sampled_frames": sampled_frames,
         "trimmed_frames": trimmed_frames,
         "hand_frame_ratio": hand_ratio,
+        "left_hand_frame_ratio": left_ratio,
+        "right_hand_frame_ratio": right_ratio,
+        "fps": fps,
     }
 
 
@@ -736,6 +956,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Authoritative label manifest for --data-dir. Every listed label must exist in the tree, "
         "and unexpected gesture directories are refused before extraction.",
     )
+    parser.add_argument(
+        "--recording-plan",
+        default=DEFAULT_RECORDING_PLAN_FILE,
+        help="Versioned directory-mode recording contract (people and clips per label)",
+    )
+    parser.add_argument(
+        "--clips-per-label",
+        type=positive_int,
+        default=None,
+        help="Optional assertion; directory mode must match recording plan exactly",
+    )
     parser.add_argument("--model-dir", default="models", help="Directory for model and training metadata")
     parser.add_argument(
         "--cache-dir",
@@ -778,14 +1009,38 @@ def main() -> None:
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
+    plan: RecordingPlan | None = None
     try:
         if args.data_dir:
+            # The plan and labels are loaded before discovery/extraction.  A default labels path
+            # means "use the plan's relative labels_file"; an explicit custom path is supported
+            # for isolated synthetic/test datasets but still shares the same people/count plan.
+            labels_override = None if args.labels_file == DEFAULT_LABELS_FILE else args.labels_file
+            plan, expected_labels, _ = load_directory_contract(
+                args.data_dir, args.recording_plan, labels_override
+            )
+            args.recording_plan_metadata = {
+                "schema_version": plan.schema_version,
+                "dataset_version": plan.dataset_version,
+                "people": list(plan.people),
+                "clips_per_label": plan.clips_per_label,
+            }
+            if args.clips_per_label is not None and args.clips_per_label != plan.clips_per_label:
+                raise ValueError(
+                    f"--clips-per-label={args.clips_per_label} conflicts with recording plan "
+                    f"({plan.clips_per_label})"
+                )
+            tree = validate_recording_tree(args.data_dir, plan, expected_labels, strict_counts=True)
+            if not tree.valid:
+                raise ValueError("recording plan gate failed before MediaPipe: " + " | ".join(tree.errors))
             clips = discover_clips(args.data_dir)
-            expected_labels = read_expected_labels(args.labels_file)
             validate_expected_labels(clips, expected_labels)
         else:
             clips = parse_video_specs(args.video)
             expected_labels = label_order(clips)
+            duplicate_errors = duplicate_content_errors(clips)
+            if duplicate_errors:
+                raise ValueError("legacy --video leakage gate failed: " + " | ".join(duplicate_errors))
         validate_clips(clips, require_signer_split=args.loso)
     except (ValueError, OSError) as exc:
         raise SystemExit(f"error: {exc}") from exc
@@ -811,6 +1066,8 @@ def main() -> None:
         print(f"Dropped {len(failures)} unusable clip(s); re-checking invariants on what is left.")
         # Invariants were checked on the full list; dropped clips can break them.
         try:
+            if plan is not None:
+                validate_plan_clips(clips, plan, expected_labels)
             validate_clips(clips, require_signer_split=args.loso)
         except ValueError as exc:
             raise SystemExit(f"error after dropping {len(failures)} unusable clip(s): {exc}") from exc
@@ -914,7 +1171,7 @@ def main() -> None:
             ),
         }
         report_path = model_dir / "loso_report.json"
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
         print(
             f"\nLOSO over {len(people)} signers: macro mean {report['macro_mean_accuracy']:.1%}, "
             f"pooled {report['pooled_accuracy']:.1%} ({total_correct}/{total_tested} clips), "
@@ -957,6 +1214,15 @@ def main() -> None:
         "bidirectional": model.bidirectional,
         "pooling": model.pooling,
         "features_version": FEATURES_VERSION,
+        "feature_contract": FEATURE_CONTRACT,
+        "rejection_contract": REJECTION_CONTRACT,
+        "segmentation_contract": SEGMENTATION_CONTRACT,
+        "reject_policy": {
+            "schema_version": 1,
+            "calibrated": False,
+            "source": "not-calibrated",
+        },
+        "recording_plan": getattr(args, "recording_plan_metadata", {"mode": "legacy"}),
         "augmentation_version": AUGMENTATION_VERSION,
         "model_architecture_version": MODEL_ARCHITECTURE_VERSION,
         "training_recipe_version": TRAINING_RECIPE_VERSION,
@@ -989,8 +1255,8 @@ def main() -> None:
         ),
         "history": history,
     }
-    (model_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
-    (model_dir / "labels.json").write_text(json.dumps(labels, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_text(model_dir / "metrics.json", json.dumps(metrics, ensure_ascii=False, indent=2) + "\n")
+    _atomic_write_text(model_dir / "labels.json", json.dumps(labels, ensure_ascii=False, indent=2) + "\n")
 
     print(f"Saved {checkpoint_path} ({len(labels)} labels, {args.epochs} epochs, all clips)")
     print(

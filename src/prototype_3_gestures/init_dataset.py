@@ -14,6 +14,12 @@ from pathlib import Path
 
 from .vsl3.console import configure_utf8_stdio
 from .vsl3.labels import DEFAULT_LABELS_FILE, normalise_label, normalised_label_directories, read_expected_labels
+from .vsl3.recording_plan import (
+    DEFAULT_RECORDING_PLAN_FILE,
+    RecordingPlan,
+    load_recording_plan,
+    resolve_labels_file,
+)
 
 configure_utf8_stdio()
 
@@ -195,6 +201,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--data-dir", required=True, help="Thư mục gốc của bộ quay mới")
     parser.add_argument("--labels-file", default=DEFAULT_LABELS_FILE, help="Một nhãn tiếng Việt mỗi dòng")
+    parser.add_argument(
+        "--recording-plan",
+        default=DEFAULT_RECORDING_PLAN_FILE,
+        help="Hợp đồng versioned của bộ quay V1; labels vẫn đọc từ labels_file của plan",
+    )
     people = parser.add_mutually_exclusive_group(required=True)
     people.add_argument("--people", nargs="+", help="Danh sách mã ẩn danh, ví dụ P01 P02 P03 P04")
     people.add_argument("--people-count", type=positive_int, help="Tự sinh P01..Pxx")
@@ -206,8 +217,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     try:
-        labels = read_expected_labels(args.labels_file)
-        people = args.people if args.people is not None else build_people(args.people_count)
+        plan = load_recording_plan(args.recording_plan)
+        labels_path = (
+            resolve_labels_file(args.recording_plan, plan)
+            if args.labels_file == DEFAULT_LABELS_FILE
+            else Path(args.labels_file).resolve()
+        )
+        labels = read_expected_labels(labels_path)
+        requested_people = args.people if args.people is not None else build_people(args.people_count)
+        if requested_people != list(plan.people):
+            raise ValueError(
+                f"Danh sách người phải khớp recording plan: cần {list(plan.people)}, "
+                f"nhận {requested_people}"
+            )
+        if args.clips_per_label != plan.clips_per_label:
+            raise ValueError(
+                f"--clips-per-label={args.clips_per_label} khác recording plan "
+                f"({plan.clips_per_label})"
+            )
+        people = list(plan.people)
         summary = initialise_dataset(
             args.data_dir,
             people=people,
@@ -237,7 +265,8 @@ def main() -> None:
     )
     print(
         f"Kiểm sau khi quay: vslr-check --data-dir \"{summary.data_dir}\" "
-        f"--labels-file \"{args.labels_file}\" --clips-per-label {summary.clips_per_label}"
+        f"--labels-file \"{labels_path}\" --recording-plan \"{args.recording_plan}\" "
+        f"--clips-per-label {summary.clips_per_label}"
     )
 
 

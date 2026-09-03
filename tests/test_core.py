@@ -243,14 +243,10 @@ class ModelTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "FEATURES_VERSION"):
                 load_checkpoint(path)
 
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                loaded, _, _ = load_checkpoint(path, allow_incompatible_features=True)
-
-            messages = " ".join(str(w.message) for w in caught)
-            self.assertEqual(loaded.pooling, "legacy_last_step")
-            self.assertIn("FEATURES_VERSION", messages)
-            self.assertIn("retrain", messages.lower())
+            # The old checkpoint is also dimension-incompatible after the v3 presence channels;
+            # there is intentionally no public override that could make this look safe.
+            with self.assertRaisesRegex(ValueError, "Refusing inference"):
+                load_checkpoint(path)
 
     def test_checkpoint_with_unknown_model_architecture_version_is_refused(self):
         with TemporaryDirectory() as tmp:
@@ -719,7 +715,7 @@ class TrainingSignatureTests(unittest.TestCase):
                 folder.mkdir(parents=True)
                 for index in range(2):
                     path = folder / f"{index}.mov"
-                    path.touch()
+                    path.write_bytes(f"{label}-{index}".encode("utf-8"))
                     clips.append(Clip(label=label, person="P1", path=path.resolve()))
             sequences = [np.zeros((SEQUENCE_LENGTH, FEATURE_DIM), dtype=np.float32) for _ in clips]
             extraction = [
@@ -738,8 +734,6 @@ class TrainingSignatureTests(unittest.TestCase):
             model_dir = root / "models"
             argv = [
                 "vslr-train",
-                "--data-dir",
-                str(root),
                 "--model-dir",
                 str(model_dir),
                 "--cache-dir",
@@ -749,10 +743,13 @@ class TrainingSignatureTests(unittest.TestCase):
                 "--augment",
                 "0",
             ]
+            argv.extend(
+                item
+                for clip in clips
+                for item in ("--video", f"{clip.label}={clip.path}")
+            )
             with (
                 mock.patch("sys.argv", argv),
-                mock.patch("prototype_3_gestures.prepare_train.discover_clips", return_value=clips),
-                mock.patch("prototype_3_gestures.prepare_train.read_expected_labels", return_value=labels),
                 mock.patch(
                     "prototype_3_gestures.prepare_train.extract_all",
                     return_value=(sequences, clips, extraction, []),
@@ -1066,12 +1063,12 @@ class SegmentTrackerTests(unittest.TestCase):
         self.assertFalse(segments[0].forced)
 
     def test_cap_reached_after_hands_are_down_does_not_swallow_the_next_word(self):
-        """The cap can be crossed inside the no-hand tail, where the hands are already down, so the
-        next gesture must be allowed to start immediately."""
+        """Any max-boundary waits for a true hand drop before opening another gesture."""
         tracker = SegmentTracker(word_gap=3.0, max_seconds=0.2)
         script = [(True, 0.0), (True, 0.05), (True, 0.10)]
         script += [(False, 0.15), (False, 0.25)]
-        script += [(True, 0.30 + i * 0.05) for i in range(6)]
+        script += [(False, 0.35 + i * 0.10) for i in range(30)]
+        script += [(True, 3.40 + i * 0.05) for i in range(6)]
 
         segments = self._feed(tracker, script)
 

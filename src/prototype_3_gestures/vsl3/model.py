@@ -8,7 +8,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .features import FEATURES_VERSION
+from .features import FEATURE_CONTRACT, FEATURE_DIM, FEATURES_VERSION, SEQUENCE_LENGTH
+from .reject import load_reject_policy
 
 
 POOLING_FWD_LAST_BWD_FIRST = "fwd_last_bwd_first"
@@ -18,6 +19,8 @@ POOLING_MODES = (POOLING_FWD_LAST_BWD_FIRST, POOLING_LEGACY_LAST_STEP)
 # Bump when the network topology or its fixed dropout/head defaults change. Persisting this beside
 # the concrete dimensions keeps a LOSO report from being paired with weights made by another model.
 MODEL_ARCHITECTURE_VERSION = 1
+REJECTION_CONTRACT = "closed-set-reject-v1-calibration-only"
+SEGMENTATION_CONTRACT = "timestamp-segment-v2-min-active-no-tail"
 DEFAULT_HIDDEN_SIZE = 96
 DEFAULT_NUM_LAYERS = 1
 DEFAULT_BIDIRECTIONAL = True
@@ -95,15 +98,22 @@ def save_checkpoint(path: str | Path, model: GestureLSTM, labels: list[str], con
 def load_checkpoint(
     path: str | Path,
     device: torch.device | str = "cpu",
-    *,
-    allow_incompatible_features: bool = False,
 ) -> tuple[GestureLSTM, list[str], dict]:
     checkpoint = torch.load(path, map_location=device)
+    if not isinstance(checkpoint, dict) or "config" not in checkpoint or "labels" not in checkpoint:
+        raise ValueError(f"{path} is not a VSLR checkpoint with config and labels")
     config = checkpoint["config"]
+    if (
+        not isinstance(config, dict)
+        or not isinstance(checkpoint["labels"], list)
+        or not checkpoint["labels"]
+        or not all(isinstance(label, str) and label for label in checkpoint["labels"])
+        or len(set(checkpoint["labels"])) != len(checkpoint["labels"])
+    ):
+        raise ValueError(f"{path} has an invalid checkpoint config or empty labels")
 
     # Missing means the checkpoint predates this key but uses the original topology (= v1).
-    # A future/same-shape architecture can change semantics without tripping load_state_dict, so
-    # unlike landmark features there is no meaningful compatibility override in this loader.
+    # A future/same-shape architecture can change semantics without tripping load_state_dict.
     stored_architecture_version = int(config.get("model_architecture_version", 1))
     if stored_architecture_version != MODEL_ARCHITECTURE_VERSION:
         raise ValueError(
@@ -122,13 +132,51 @@ def load_checkpoint(
             f"{' (no key: assumed 1)' if 'features_version' not in config else ''}, but this install "
             f"extracts version {FEATURES_VERSION}. Predictions are unreliable until you retrain."
         )
-        if not allow_incompatible_features:
-            raise ValueError(
-                message
-                + " Refusing inference by default; retrain the checkpoint or explicitly opt in to "
-                "incompatible features for a temporary legacy demo."
-            )
-        warnings.warn(message, stacklevel=2)
+        raise ValueError(message + " Refusing inference; retrain the checkpoint with this feature contract.")
+
+    stored_feature_contract = config.get("feature_contract")
+    if stored_features_version == FEATURES_VERSION and stored_feature_contract != FEATURE_CONTRACT:
+        raise ValueError(
+            f"{path} has feature_contract={stored_feature_contract!r}, expected {FEATURE_CONTRACT!r}. "
+            "Refusing to interpret a same-version checkpoint with unknown preprocessing semantics."
+        )
+    stored_input_dim = int(config.get("input_dim", -1))
+    if stored_input_dim != FEATURE_DIM:
+        raise ValueError(
+            f"{path} has input_dim={stored_input_dim}, but this install extracts FEATURE_DIM={FEATURE_DIM}. "
+            "Retrain the checkpoint."
+        )
+    if "sequence_length" not in config and stored_features_version == FEATURES_VERSION:
+        raise ValueError(f"{path} is missing checkpoint sequence_length; refusing incomplete metadata")
+    stored_sequence_length = int(config.get("sequence_length", SEQUENCE_LENGTH))
+    if stored_sequence_length != SEQUENCE_LENGTH:
+        raise ValueError(
+            f"{path} has sequence_length={stored_sequence_length}, but this install uses "
+            f"SEQUENCE_LENGTH={SEQUENCE_LENGTH}. Retrain the checkpoint."
+        )
+    if stored_features_version == FEATURES_VERSION:
+        required_metadata = {
+            "rejection_contract": REJECTION_CONTRACT,
+            "segmentation_contract": SEGMENTATION_CONTRACT,
+            "training_signature": None,
+            "recording_plan": None,
+            "reject_policy": None,
+        }
+        for key, expected in required_metadata.items():
+            if key not in config:
+                raise ValueError(f"{path} is missing checkpoint metadata field {key!r}")
+            value = config[key]
+            if expected is not None and value != expected:
+                raise ValueError(f"{path} has incompatible checkpoint {key}={value!r}")
+            if key == "training_signature" and (not isinstance(value, str) or not value):
+                raise ValueError(f"{path} has invalid checkpoint training_signature")
+            if key == "recording_plan" and not isinstance(value, dict):
+                raise ValueError(f"{path} has invalid checkpoint recording_plan metadata")
+    if "reject_policy" in config:
+        try:
+            load_reject_policy(config["reject_policy"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{path} has invalid reject_policy metadata: {exc}") from exc
 
     pooling = config.get("pooling")
     if pooling is None:
@@ -143,7 +191,7 @@ def load_checkpoint(
         )
 
     model = GestureLSTM(
-        input_dim=int(config["input_dim"]),
+        input_dim=stored_input_dim,
         num_classes=len(checkpoint["labels"]),
         hidden_size=int(config.get("hidden_size", DEFAULT_HIDDEN_SIZE)),
         num_layers=int(config.get("num_layers", DEFAULT_NUM_LAYERS)),

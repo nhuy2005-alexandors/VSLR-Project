@@ -1,4 +1,4 @@
-# CLAUDE.md — VSLR 30 cử chỉ
+# AGENTS.md — VSLR 30 cử chỉ
 
 Project NCKH: nhận 30 cử chỉ tiếng Việt bằng MediaPipe + BiLSTM, ghép thành câu và đọc bằng TTS.
 
