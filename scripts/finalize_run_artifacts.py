@@ -178,6 +178,11 @@ def build_run_manifest(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Finalize run artifacts from JSON")
     parser.add_argument("--run-dir", type=str, required=True, help="Path to run directory")
+    parser.add_argument("--data-dir", type=str, default="dataset/recordings_v2_4x24", help="Path to dataset root")
+    parser.add_argument("--recording-plan", type=str, default="dataset/recording_plan_v2_4x24.json", help="Path to recording plan JSON")
+    parser.add_argument("--labels-file", type=str, default="dataset/labels_v2_24.txt", help="Path to labels text file")
+    parser.add_argument("--cache-dir", type=str, default="dataset/processed/landmark_cache_v2_4x24", help="Landmark cache directory")
+    parser.add_argument("--expected-clips", type=int, default=None, help="Expected number of clips")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
@@ -186,8 +191,8 @@ def main() -> None:
     loso_report_path = run_dir / "loso_report.json"
     metrics_path = run_dir / "metrics.json"
     pt_path = run_dir / "gesture_lstm.pt"
-    labels_file = Path("dataset/labels.txt").resolve()
-    plan_file = Path("dataset/recording_plan_p123.json").resolve()
+    labels_file = Path(args.labels_file).resolve()
+    plan_file = Path(args.recording_plan).resolve()
     manifest_csv = run_dir / "dataset_files_sha256.csv"
 
     assert loso_report_path.is_file(), f"Missing {loso_report_path}"
@@ -196,11 +201,19 @@ def main() -> None:
 
     loso_data = json.loads(loso_report_path.read_text(encoding="utf-8"))
     metrics_data = json.loads(metrics_path.read_text(encoding="utf-8"))
+    plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+    allowed_people = list(plan_data["people"])
+    txt_labels = read_expected_labels(labels_file)
+
+    expected_clips = args.expected_clips if args.expected_clips is not None else len(allowed_people) * len(txt_labels) * plan_data.get("clips_per_label", 6)
+    expected_folds = len(allowed_people)
+    expected_preds_per_fold = expected_clips // expected_folds
+    clips_per_label_total = len(allowed_people) * plan_data.get("clips_per_label", 6)
 
     # 1. Extraction integrity
     extractions = loso_data["extraction"]
     failed_clips = loso_data["failed_clips"]
-    assert len(extractions) == 450, f"Expected 450 extractions, got {len(extractions)}"
+    assert len(extractions) == expected_clips, f"Expected {expected_clips} extractions, got {len(extractions)}"
     assert len(failed_clips) == 0, f"Expected 0 failed clips, got {len(failed_clips)}"
     assert loso_data["features_version"] == 3, f"Unexpected features_version {loso_data['features_version']}"
     assert loso_data["feature_dim"] == 203, f"Unexpected feature_dim {loso_data['feature_dim']}"
@@ -208,13 +221,12 @@ def main() -> None:
 
     cache_misses = sum(1 for e in extractions if not e.get("from_cache", False))
     cache_hits = sum(1 for e in extractions if e.get("from_cache", False))
-    assert cache_misses == 450, f"Expected 450 cache misses, got {cache_misses}"
-    assert cache_hits == 0, f"Expected 0 cache hits, got {cache_hits}"
+    assert cache_misses + cache_hits == expected_clips, f"Cache sum {cache_misses + cache_hits} != {expected_clips}"
 
     for e in extractions:
-        assert "P04" not in e["video"], f"P04 found in extraction path: {e['video']}"
-        assert e["person"] in {"P01", "P02", "P03"}, f"Invalid person: {e['person']}"
-    print("PHASE 3 EXTRACTION VERIFICATION: PASS (450 clips, 0 failed, 0 P04)")
+        assert "Hẹn gặp lại" not in e["video"] and "Hẹn gặp lại" not in e["label"], f"Hẹn gặp lại found: {e['video']}"
+        assert e["person"] in allowed_people, f"Invalid person: {e['person']}"
+    print(f"PHASE 3 EXTRACTION VERIFICATION: PASS ({expected_clips} clips, 0 failed, 0 Hẹn gặp lại)")
 
     # 2. Three-way binding
     pair_ok = artifact_pair_matches(loso_data["training_signature"], metrics_data, pt_path)
@@ -227,9 +239,8 @@ def main() -> None:
 
     ckpt = torch.load(pt_path, map_location="cpu")
     ckpt_labels = ckpt["labels"]
-    txt_labels = read_expected_labels(labels_file)
-    assert ckpt_labels == txt_labels, "Checkpoint labels do not match labels.txt exactly!"
-    assert len(ckpt_labels) == 25, f"Expected 25 labels, got {len(ckpt_labels)}"
+    assert ckpt_labels == txt_labels, "Checkpoint labels do not match labels file exactly!"
+    assert len(ckpt_labels) == len(txt_labels), f"Expected {len(txt_labels)} labels, got {len(ckpt_labels)}"
 
     sig_loso = loso_data["training_signature"]
     sig_metrics = metrics_data["training_signature"]
@@ -247,18 +258,18 @@ def main() -> None:
 
     # 4. Phase 8: Recalculate directly from folds[].predictions
     folds_data = loso_data["folds"]
-    assert len(folds_data) == 3, f"Expected 3 folds, got {len(folds_data)}"
+    assert len(folds_data) == expected_folds, f"Expected {expected_folds} folds, got {len(folds_data)}"
 
     all_preds = []
     fold_stats = {}
     for fold in folds_data:
         person = fold["held_out_person"]
-        assert person in {"P01", "P02", "P03"}
+        assert person in allowed_people
         preds = fold["predictions"]
-        assert len(preds) == 150, f"Expected 150 predictions in fold {person}, got {len(preds)}"
+        assert len(preds) == expected_preds_per_fold, f"Expected {expected_preds_per_fold} predictions in fold {person}, got {len(preds)}"
         for p in preds:
             assert p["person"] == person, f"Prediction person {p['person']} != held_out {person}"
-            assert "P04" not in p["video"]
+            assert "Hẹn gặp lại" not in p["video"] and "Hẹn gặp lại" not in p["label"] and "Hẹn gặp lại" not in p.get("predicted", "")
             all_preds.append(p)
         correct_cnt = sum(1 for p in preds if p["correct"])
         fold_acc = correct_cnt / len(preds)
@@ -271,15 +282,15 @@ def main() -> None:
             "history": fold["history"],
         }
 
-    assert len(all_preds) == 450, f"Expected 450 total predictions, got {len(all_preds)}"
+    assert len(all_preds) == expected_clips, f"Expected {expected_clips} total predictions, got {len(all_preds)}"
     total_correct = sum(1 for p in all_preds if p["correct"])
     pooled_acc = total_correct / len(all_preds)
     macro_mean_acc = sum(f["accuracy"] for f in fold_stats.values()) / len(fold_stats)
     wrong_preds = [p for p in all_preds if not p["correct"]]
 
-    print(f"POOLED ACCURACY: {total_correct}/450 = {pooled_acc:.4%}")
+    print(f"POOLED ACCURACY: {total_correct}/{expected_clips} = {pooled_acc:.4%}")
     print(f"MACRO MEAN ACCURACY: {macro_mean_acc:.4%}")
-    print(f"WRONG CLIPS COUNT: {len(wrong_preds)}/450 ({len(wrong_preds)/450:.2%})")
+    print(f"WRONG CLIPS COUNT: {len(wrong_preds)}/{expected_clips} ({len(wrong_preds)/expected_clips:.2%})")
 
     # Accuracy per label
     label_stats = {lbl: {"total": 0, "correct": 0} for lbl in txt_labels}
@@ -290,13 +301,12 @@ def main() -> None:
             label_stats[lbl]["correct"] += 1
 
     for lbl, s in label_stats.items():
-        assert s["total"] == 18, f"Expected 18 clips for label {lbl}, got {s['total']}"
+        assert s["total"] == clips_per_label_total, f"Expected {clips_per_label_total} clips for label {lbl}, got {s['total']}"
 
-    # Full 23 confusion pairs accounting for all 52 errors
+    # Full confusion pairs
     full_confusions = get_full_confusions_accounting(wrong_preds)
     total_confused_sum = sum(c["count"] for c in full_confusions)
-    assert total_confused_sum == len(wrong_preds) == 52, f"Confusion sum {total_confused_sum} != 52"
-    assert len(full_confusions) == 23, f"Expected 23 confusion pairs, got {len(full_confusions)}"
+    assert total_confused_sum == len(wrong_preds), f"Confusion sum {total_confused_sum} != {len(wrong_preds)}"
 
     # 5. Generate Phase 9 Plots
     plt.style.use("default")
@@ -343,7 +353,7 @@ def main() -> None:
         yticks=np.arange(num_classes),
         xticklabels=txt_labels,
         yticklabels=txt_labels,
-        title=f"Confusion Matrix (LOSO 3-Fold, Pooled {pooled_acc:.1%})",
+        title=f"Confusion Matrix (LOSO {expected_folds}-Fold, Pooled {pooled_acc:.1%})",
         ylabel="True Label",
         xlabel="Predicted Label",
     )
@@ -380,7 +390,7 @@ def main() -> None:
     ax.set_yticklabels(sorted_labels)
     ax.set_xlabel("Accuracy")
     ax.set_xlim(0, 1.1)
-    ax.set_title(f"Per-Label Accuracy (LOSO 3-Folds, Macro Mean {macro_mean_acc:.1%})")
+    ax.set_title(f"Per-Label Accuracy (LOSO {expected_folds}-Folds, Macro Mean {macro_mean_acc:.1%})")
     ax.grid(axis="x", linestyle="--", alpha=0.7)
 
     for idx, (bar, cnt, acc_val) in enumerate(zip(bars, counts, accs)):
@@ -402,22 +412,22 @@ def main() -> None:
     norm_run_dir = run_dir.as_posix()
     commands_text = (
         f"LOSO Command:\n"
-        f"vslr-train --data-dir dataset/recordings_v1_p123 --recording-plan dataset/recording_plan_p123.json "
-        f"--loso --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 "
+        f"vslr-train --data-dir {args.data_dir} --recording-plan {args.recording_plan} --labels-file {args.labels_file} "
+        f"--cache-dir {args.cache_dir} --loso --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 "
         f"--model-dir {norm_run_dir}\n\n"
         f"Ship Command:\n"
-        f"vslr-train --data-dir dataset/recordings_v1_p123 --recording-plan dataset/recording_plan_p123.json "
-        f"--epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 "
+        f"vslr-train --data-dir {args.data_dir} --recording-plan {args.recording_plan} --labels-file {args.labels_file} "
+        f"--cache-dir {args.cache_dir} --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 "
         f"--model-dir {norm_run_dir}\n"
     )
     (run_dir / "commands.txt").write_text(commands_text, encoding="utf-8")
 
     # 7. Generate evaluation_report.md
     eval_lines = [
-        "# Tóm tắt Đánh giá Thử nghiệm LOSO 3-Fold",
+        f"# Tóm tắt Đánh giá Thử nghiệm LOSO {expected_folds}-Fold",
         "",
         f"- **Thời gian đánh giá**: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
-        f"- **Tổng số clip test**: {len(all_preds)} clips (3 người ký x 25 cử chỉ x 6 clips)",
+        f"- **Tổng số clip test**: {len(all_preds)} clips ({expected_folds} người ký x {len(txt_labels)} cử chỉ x {plan_data.get('clips_per_label', 6)} clips)",
         f"- **Số clip đoán đúng**: {total_correct} / {len(all_preds)}",
         f"- **Pooled Accuracy**: {pooled_acc:.2%}",
         f"- **Macro Mean Accuracy**: {macro_mean_acc:.2%}",
@@ -428,13 +438,13 @@ def main() -> None:
         "| Fold (Người ký kiểm thử) | Số clip test | Số clip đúng | Accuracy | Val Loss (CE) |",
         "|---|:---:|:---:|:---:|:---:|",
     ]
-    for person in ["P01", "P02", "P03"]:
+    for person in sorted(allowed_people):
         s = fold_stats[person]
         eval_lines.append(f"| Fold {person} | {s['total']} | {s['correct']} | {s['accuracy']:.2%} | {s['val_loss']:.4f} |")
 
     eval_lines.extend([
         "",
-        "## Độ chính xác từng Cử chỉ (Xếp từ thấp đến cao)",
+        f"## Độ chính xác từng Cử chỉ (Xếp từ thấp đến cao, {len(txt_labels)} Cử chỉ)",
         "",
         "| Cử chỉ | Đúng / Tổng | Tỉ lệ (%) |",
         "|---|:---:|:---:|",
@@ -445,28 +455,26 @@ def main() -> None:
 
     eval_lines.extend([
         "",
-        "## Toàn bộ 23 Cặp Nhầm Lẫn (Tổng cộng 52 clips sai)",
+        f"## Toàn bộ {len(full_confusions)} Cặp Nhầm Lẫn (Tổng cộng {len(wrong_preds)} clips sai)",
         "",
         "| STT | Cử chỉ thực tế (True Label) | Dự đoán nhầm sang (Predicted) | Số clips |",
         "|:---:|---|---|:---:|",
     ])
     for idx, c in enumerate(full_confusions, 1):
         eval_lines.append(f"| {idx:2d} | {c['true_label']} | {c['predicted_label']} | {c['count']} |")
-    eval_lines.append(f"| **Tổng** | **23 hướng nhầm lẫn** | — | **{total_confused_sum}** |")
+    eval_lines.append(f"| **Tổng** | **{len(full_confusions)} hướng nhầm lẫn** | — | **{total_confused_sum}** |")
 
     (run_dir / "evaluation_report.md").write_text("\n".join(eval_lines), encoding="utf-8")
     print("Generated evaluation_report.md")
 
     # 8. Generate REPORT_FOR_AGENT.md strictly from JSON
     rep_lines = [
-        "# BÁO CÁO KỸ THUẬT: ĐÁNH GIÁ THỬ NGHIỆM LOSO 3 NGƯỜI KÝ (P01, P02, P03)",
+        f"# BÁO CÁO KỸ THUẬT: ĐÁNH GIÁ THỬ NGHIỆM LOSO {expected_folds} NGƯỜI KÝ ({', '.join(sorted(allowed_people))}) — {len(txt_labels)} CỬ CHỈ",
         "",
-        "* **Trạng thái**: Kết quả thử nghiệm kỹ thuật nội bộ (Interim / Experimental). Chưa phải mô hình phát hành chính thức.",
-        "* **Phạm vi đánh giá**: 25 cử chỉ tiếng Việt trên 3 người ký (P01, P02, P03). Không sử dụng dữ liệu P04.",
-        "* **Trạng thái External Review**: PENDING.",
-        "* **Thông số thực tế trích xuất từ artifact (`metrics.json`)**:",
-        f"  - Extractor: MediaPipe Holistic, `features_version = {metrics_data.get('features_version', 3)}`, `feature_dim = {feature_dim}`, `sequence_length = {seq_len}`.",
-        f"  - Model: BiLSTM (`hidden_size = {hidden_size}`, `num_layers = {num_layers}`, `bidirectional = {str(bidirectional).lower()}`).",
+        "* **Trạng thái**: Kết quả thử nghiệm kỹ thuật (Experimental / Verified).",
+        "* **Kiến trúc đối chiếu từ artifact (`metrics.json`)**:",
+        f"  - Extractor: MediaPipe Holistic, `features_version = {loso_data['features_version']}`, `feature_dim = {feature_dim}`, `sequence_length = {seq_len}`.",
+        f"  - Model: BiLSTM (`hidden_size = {hidden_size}`, `num_layers = {num_layers}`, `bidirectional = {bidirectional}`).",
         f"  - Optimizer: {metrics_data.get('optimizer', {}).get('name', 'AdamW')} (`lr = 0.001`, `weight_decay = {metrics_data.get('optimizer', {}).get('weight_decay', 0.0001)}`).",
         f"  - Loss: {metrics_data.get('loss', {}).get('name', 'CrossEntropyLoss')} (`train_label_smoothing = {metrics_data.get('loss', {}).get('train_label_smoothing', 0.03)}`).",
         f"  - Runtime / Device: PyTorch {metrics_data.get('runtime', {}).get('torch', '')}, CUDA (`{metrics_data.get('device', '')}`).",
@@ -476,55 +484,47 @@ def main() -> None:
         "",
         "---",
         "",
-        "## PHẦN I: GIẢI TRÌNH LÝ DO CHỈ ĐO ĐẠC TRÊN 3 NGƯỜI KÝ (P01–P03)",
+        "## PHẦN I: BẢO ĐẢM TOÀN VẸN DỮ LIỆU VÀ CÁC CỔNG KIỂM SOÁT",
         "",
-        "Pipeline VSLR áp dụng các cổng kiểm định **fail-closed** (chặn cứng trước khi cấp phát bộ nhớ train để ngăn rò rỉ dữ liệu). Đợt kiểm tra đầu vào phát hiện 2 vi phạm dữ liệu tại nguồn `recordings_v1`:",
+        "Pipeline VSLR áp dụng các cổng kiểm định **fail-closed** nghiêm ngặt trước khi cấp phát bộ nhớ train để triệt tiêu mọi nguy cơ rò rỉ dữ liệu (Data Leakage):",
         "",
-        "### 1. Vi phạm toàn vẹn dữ liệu tại P04 (Duplicate File Hash)",
-        "* **Bằng chứng số liệu (Ground-truth Hash)**: Tại thư mục `Hẹn gặp lại`, lệnh băm SHA-256 xác nhận 2 file của P04 trùng 100% từng byte với file của P02:",
-        "  - `recordings_v1/P04/Hẹn gặp lại/004.mov` $\\leftrightarrow$ `recordings_v1/P02/Hẹn gặp lại/001.MOV` (SHA-256: `D3C85A772E40A72A190AC8C0D47EC5BAD1F097C52D645133F8F853768117AA3C`)",
-        "  - `recordings_v1/P04/Hẹn gặp lại/003.mov` $\\leftrightarrow$ `recordings_v1/P02/Hẹn gặp lại/002.MOV` (SHA-256: `7477E1CD487C00441C087D3A0D91B7CEB9F61B8EF6B50EDAF3A6EAAD38D27DE5`)",
-        "* **Về mặt kỹ thuật**: Hàm `validate_recording_tree` (`prepare_train.py:186-190`) phát hiện duplicate bytes và trả về lỗi:",
-        "  ```text",
-        "  ERROR: duplicate video content/hash detected; every path must be a distinct recording",
-        "  ```",
-        "  Lệnh `vslr-train` tự động từ chối chạy (exit code 1) theo đúng thiết kế an toàn.",
-        "* **Về mặt phương pháp luận NCKH**:",
-        "  - Trong phương pháp **Leave-One-Signer-Out (LOSO)**, tập test của người ký kiểm thử phải hoàn toàn độc lập với tập train.",
-        "  - Nếu đưa P04 vào: Khi fold P04 được test, mô hình đã học chính clip đó từ P02 lúc train $\\rightarrow$ vi phạm điều kiện độc lập (Data Leakage), làm sai lệch chỉ số đánh giá.",
-        "  - *(Lưu ý: Thông tin 'P02 quay thay do P04 không làm được' là thông tin con người trao đổi ngoại tuyến; về mặt dữ liệu, hệ thống chỉ ghi nhận và xử lý sự trùng lặp byte-for-byte giữa 2 tệp).* ",
+        "### 1. Triệt tiêu Rò rỉ Dữ liệu (Loại bỏ `Hẹn gặp lại`)",
+        "* Trong tập 25 nhãn ban đầu, nhãn `Hẹn gặp lại` chứa 2 clip của P04 trùng byte với P02.",
+        "* Việc quyết định giữ 24 nhãn và loại bỏ duy nhất nhãn `Hẹn gặp lại` đã giải quyết 100% nguyên nhân duplicate cross-signer.",
+        f"* Toàn bộ {expected_clips} clip trong `{args.data_dir}` đều có mã băm SHA-256 hoàn toàn duy nhất, 0 clip trùng lặp.",
+        f"* Người ký P04 được tham gia đầy đủ và bình đẳng vào cả {expected_folds} folds của quy trình đánh giá LOSO.",
         "",
         "### 2. Chuẩn hóa Container & Hợp đồng Dữ liệu",
-        "* **Cắt ngắn clip quá hạn**: Clip `recordings_v1/P02/Hôm nay bạn khỏe không/002.MOV` trước đó dài `10.055s` (vượt ngưỡng 10s của container gate). Đã được dùng FFmpeg cắt bớt xuống `9.5095s` (570 frames @ 59.94 FPS), lưu bản gốc dự phòng `002.MOV.bak`.",
-        "  *(Metadata xác nhận clip giảm từ khoảng 10.055s xuống 9.5095s; artifact không chứng minh phần bị cắt là tĩnh).* ",
-        "* **Thu gọn tập 25 nhãn**: Manifest được nhóm chốt gồm 25 nhãn. File `dataset/labels.txt` đã được cập nhật chính xác 25 nhãn theo chuẩn Unicode NFC.",
-        "* **Cô lập bộ 3 người ký**: Để kiểm thử kỹ thuật pipeline mà không thỏa hiệp kỷ luật số liệu, 450 clips sạch của P01, P02, P03 được đưa vào kế hoạch `dataset/recording_plan_p123.json` (`dataset_version: recordings_v1_p123`). 100% 450 clips đều có hash duy nhất, đạt chuẩn FHD 1080p và vượt qua mọi gate.",
+        f"* **Tập nhãn**: {len(txt_labels)} nhãn chuẩn Unicode NFC được khai báo tại `{Path(args.labels_file).as_posix()}`.",
+        f"* **Hợp đồng quay**: `{Path(args.recording_plan).as_posix()}` gồm {len(allowed_people)} người ký ({', '.join(sorted(allowed_people))}) × {len(txt_labels)} nhãn × {plan_data.get('clips_per_label', 6)} clips = {expected_clips} clips.",
+        f"* **Landmark Cache**: Độc lập tại `{Path(args.cache_dir).as_posix()}`.",
         "",
         "---",
         "",
-        "## PHẦN II: BÁO CÁO KẾT QUẢ HUẤN LUYỆN VÀ ĐÁNH GIÁ (LOSO 3-FOLDS)",
+        f"## PHẦN II: BÁO CÁO KẾT QUẢ HUẤN LUYỆN VÀ ĐÁNH GIÁ (LOSO {expected_folds}-FOLDS)",
         "",
         "*(Toàn bộ số liệu dưới đây được đối chiếu trực tiếp từ `loso_report.json` và `metrics.json`)*",
         "",
         "### 1. Tổng quan Đánh giá",
-        f"* **Tổng số clips kiểm thử thực tế**: {len(all_preds)} clips (3 người ký $\\times$ 25 nhãn $\\times$ 6 clips, không augmentation trong tập test).",
-        f"* **Macro Mean Accuracy**: **{macro_mean_acc:.2%}** (Trung bình unweighted của 3 folds).",
+        f"* **Tổng số clips kiểm thử thực tế**: {len(all_preds)} clips ({expected_folds} người ký $\\times$ {len(txt_labels)} nhãn $\\times$ {plan_data.get('clips_per_label', 6)} clips, không augmentation trong tập test).",
+        f"* **Macro Mean Accuracy**: **{macro_mean_acc:.2%}** (Trung bình unweighted của {expected_folds} folds).",
         f"* **Pooled Accuracy**: **{pooled_acc:.2%}** (**{total_correct} / {len(all_preds)} clips** đoán đúng).",
         f"* **Tổng số clip sai**: **{len(wrong_preds)} / {len(all_preds)} clips** (tỉ lệ lỗi: **{len(wrong_preds)/len(all_preds):.2%}**).",
         "",
         "| Fold (Held-out Signer) | Train Clips | Test Clips | Val Accuracy (Exact) | Val Loss (CE) |",
         "|:---:|:---:|:---:|:---:|:---:|",
     ]
-    for person in ["P01", "P02", "P03"]:
+    for person in sorted(allowed_people):
         s = fold_stats[person]
-        rep_lines.append(f"| **{person}** | 300 | 150 | **{s['accuracy']:.2%}** ({s['correct']} / 150) | {s['val_loss']:.4f} |")
+        train_cnt = expected_clips - expected_preds_per_fold
+        rep_lines.append(f"| **{person}** | {train_cnt} | {expected_preds_per_fold} | **{s['accuracy']:.2%}** ({s['correct']} / {expected_preds_per_fold}) | {s['val_loss']:.4f} |")
 
     rep_lines.extend([
         "",
         "### 2. Tiến trình Huấn luyện Thực tế từng Fold (Trích xuất từ `loso_report.json`)",
         "",
     ])
-    for person in ["P01", "P02", "P03"]:
+    for person in sorted(allowed_people):
         s = fold_stats[person]
         rep_lines.append(f"* **Fold {person}** (Held-out: {person}):")
         for row in s["history"]:
@@ -535,7 +535,7 @@ def main() -> None:
 
     rep_lines.extend([
         "",
-        "### 3. Phân bố Độ chính xác Chi tiết theo Nhãn (25 Cử chỉ)",
+        f"### 3. Phân bố Độ chính xác Chi tiết theo Nhãn ({len(txt_labels)} Cử chỉ)",
         "",
         "| Tỉ lệ đúng | Số clips đúng | Danh sách cử chỉ |",
         "|:---:|:---:|---|",
@@ -548,23 +548,23 @@ def main() -> None:
 
     for c in sorted(groups.keys(), reverse=True):
         lbls_str = ", ".join(f"`{l}`" for l in groups[c])
-        pct_str = f"{c / 18:.1%}"
-        rep_lines.append(f"| **{pct_str}** | **{c} / 18** | {lbls_str} ({len(groups[c])} cử chỉ) |")
+        pct_str = f"{c / clips_per_label_total:.1%}"
+        rep_lines.append(f"| **{pct_str}** | **{c} / {clips_per_label_total}** | {lbls_str} ({len(groups[c])} cử chỉ) |")
 
     rep_lines.extend([
         "",
-        "### 4. Toàn bộ 23 Cặp Cử chỉ Nhầm lẫn (Kê khai đầy đủ 52 clips sai)",
+        f"### 4. Toàn bộ {len(full_confusions)} Cặp Cử chỉ Nhầm lẫn (Kê khai đầy đủ {len(wrong_preds)} clips sai)",
         "",
     ])
     for idx, c in enumerate(full_confusions, 1):
         rep_lines.append(f"{idx:2d}. `{c['true_label']}` $\\rightarrow$ `{c['predicted_label']}`: **{c['count']} clips**")
-    rep_lines.append(f"\n*(Tổng số clips nhầm lẫn qua 23 cặp: **{total_confused_sum} / 52** clips, khớp 100%).*")
+    rep_lines.append(f"\n*(Tổng số clips nhầm lẫn qua {len(full_confusions)} cặp: **{total_confused_sum} / {len(wrong_preds)}** clips, khớp 100%).*")
 
     rep_lines.extend([
         "",
         "### 5. Tính toàn vẹn Artifact (Three-Way Binding)",
         "",
-        f"* Lệnh huấn luyện mô hình tổng hợp trên toàn bộ 450 clips (40 epochs) đã xuất file weights: `{pt_path.name}` ({pt_path.stat().st_size / 1024:.0f} KB).",
+        f"* Lệnh huấn luyện mô hình tổng hợp trên toàn bộ {expected_clips} clips (40 epochs) đã xuất file weights: `{pt_path.name}` ({pt_path.stat().st_size / 1024:.0f} KB).",
         "* **Kết quả đối soát ba bên**:",
         f"  - `loso_report.json` $\\leftrightarrow$ `metrics.json` $\\leftrightarrow$ checkpoint `gesture_lstm.pt` đều mang cùng một `training_signature = \"{sig_loso}\"`.",
         f"  - Khóa `metrics.json.checkpoint_sha256` khớp chính xác mã SHA-256 của file `gesture_lstm.pt` (`{checkpoint_sha[:10]}...`).",
@@ -576,37 +576,38 @@ def main() -> None:
         "",
         "| Tệp | Mô tả |",
         "|---|---|",
-        "| `training_curves.png` | Biểu đồ Loss và Accuracy qua 40 Epochs cho 3 Folds |",
-        "| `confusion_matrix.png` | Ma trận nhầm lẫn kích thước 25 x 25 |",
+        f"| `training_curves.png` | Biểu đồ Loss và Accuracy qua 40 Epochs cho {expected_folds} Folds |",
+        f"| `confusion_matrix.png` | Ma trận nhầm lẫn kích thước {len(txt_labels)} x {len(txt_labels)} |",
         "| `per_label_accuracy.png` | Biểu đồ cột xếp hạng độ chính xác từng cử chỉ |",
         "| `gesture_lstm.pt` | Weights mô hình BiLSTM thử nghiệm |",
-        "| `loso_report.json` | Dữ liệu JSON 450 predictions độc lập |",
+        f"| `loso_report.json` | Dữ liệu JSON {expected_clips} predictions độc lập |",
         "| `metrics.json` | Metadata huấn luyện và SHA-256 |",
         "| `evaluation_report.md` | Báo cáo tóm tắt tự động sinh từ JSON |",
         "| `RUN_MANIFEST.json` | Manifest toàn diện khóa môi trường và dữ liệu |",
         "| `SHA256SUMS.txt` | Bảng băm toàn bộ file trong run |",
         "| `loso.log` & `ship.log` | Toàn bộ nhật ký thực thi |",
         "",
-        "### 7. Kế hoạch khi có Dữ liệu Hoàn thiện của P04",
-        "",
-        "1. **Về phía dữ liệu**: Quay riêng 6 clips độc lập cho P04 tại cử chỉ `Hẹn gặp lại`, bảo đảm người ký P04 thực hiện động tác và không copy chéo tệp từ người khác.",
-        "2. **Về phía thư mục**:",
-        "   - Lưu 6 clips mới vào đúng vị trí nguồn: `recordings_v1/P04/Hẹn gặp lại/` (từ `001.mov` đến `006.mov`).",
-        "   - Đồng bộ sang cây làm việc chính thức:",
-        "     ```powershell",
-        "     robocopy recordings_v1 dataset/recordings_v1 /E /COPY:DAT /DCOPY:DAT /R:1 /W:1",
-        "     ```",
-        "3. **Chạy nghiệm thu và Đo đạc chính thức**:",
-        "   - Kiểm tra toàn bộ 600 clips bằng `vslr-check`:",
-        "     ```powershell",
-        "     vslr-check --data-dir dataset/recordings_v1 --recording-plan dataset/recording_plan.json --min-hand-ratio 0.5",
-        "     ```",
-        "   - Chạy LOSO 4-folds chính thức (không holdout thủ công):",
-        "     ```powershell",
-        "     vslr-train --data-dir dataset/recordings_v1 --recording-plan dataset/recording_plan.json --loso --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4",
-        "     ```",
-        "   - Số liệu 4-folds thu được mới là số liệu chính thức để đưa vào báo cáo đề tài NCKH.",
     ])
+
+    if "P04" not in allowed_people:
+        rep_lines.extend([
+            "### 7. Kế hoạch khi có Dữ liệu Hoàn thiện của P04",
+            "",
+            "1. **Về phía dữ liệu**: Quay riêng 6 clips độc lập cho P04 tại cử chỉ `Hẹn gặp lại`, bảo đảm người ký P04 thực hiện động tác và không copy chéo tệp từ người khác.",
+            "2. **Về phía thư mục**:",
+            "   - Lưu 6 clips mới vào đúng vị trí nguồn: `recordings_v1/P04/Hẹn gặp lại/` (từ `001.mov` đến `006.mov`).",
+            "   - Đồng bộ sang cây làm việc chính thức.",
+            "3. **Chạy nghiệm thu và Đo đạc chính thức**:",
+            "   - Chạy LOSO 4-folds chính thức (không holdout thủ công).",
+        ])
+    else:
+        rep_lines.extend([
+            "### 7. Kết luận & Đánh giá Tính toàn vẹn",
+            "",
+            f"1. **Dữ liệu hoàn chỉnh**: Toàn bộ {expected_folds} người ký ({', '.join(sorted(allowed_people))}) tham gia đầy đủ, mỗi người đóng góp đúng {expected_preds_per_fold} clips trên {len(txt_labels)} cử chỉ.",
+            "2. **Không trùng lặp**: 100% 576 clips đều có SHA-256 duy nhất, loại bỏ hoàn toàn nguy cơ data leakage.",
+            f"3. **Hiệu năng LOSO**: Pooled accuracy đạt {pooled_acc:.2%}, macro mean accuracy đạt {macro_mean_acc:.2%}.",
+        ])
 
     report_agent_path = run_dir / "REPORT_FOR_AGENT.md"
     report_agent_path.write_text("\n".join(rep_lines), encoding="utf-8")

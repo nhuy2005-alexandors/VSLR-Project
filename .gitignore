@@ -14,6 +14,7 @@ dataset/legacy/
 dataset/processed/
 dataset/recordings_v1/
 dataset/recordings_v1_p123/
+dataset/recordings_v2_4x24/
 recordings_v1/
 runs/
 models/backups/

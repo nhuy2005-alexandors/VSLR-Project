@@ -24,18 +24,27 @@ def get_sha256(path: Path) -> str:
 
 
 def main() -> None:
-    root = Path("dataset/recordings_v1_p123")
-    plan_path = Path("dataset/recording_plan_p123.json")
-    labels_path = Path("dataset/labels.txt")
-    out_csv = Path("dataset_files_sha256.csv")
+    import argparse
+    parser = argparse.ArgumentParser(description="Verify dataset locking and generate dataset_files_sha256.csv")
+    parser.add_argument("--data-dir", default="dataset/recordings_v2_4x24", help="Path to recordings root")
+    parser.add_argument("--recording-plan", default="dataset/recording_plan_v2_4x24.json", help="Path to recording plan JSON")
+    parser.add_argument("--labels-file", default="dataset/labels_v2_24.txt", help="Path to labels text file")
+    parser.add_argument("--out-csv", default="dataset_files_sha256.csv", help="Output CSV path")
+    parser.add_argument("--expected-clips", type=int, default=None, help="Expected number of clips (default: derived from plan)")
+    args = parser.parse_args()
 
-    print("=== PHASE 2: VERIFYING AND LOCKING DATASET ===")
+    root = Path(args.data_dir)
+    plan_path = Path(args.recording_plan)
+    labels_path = Path(args.labels_file)
+    out_csv = Path(args.out_csv)
+
+    print(f"=== VERIFYING AND LOCKING DATASET: {root} ===")
 
     # 1. Verify contract
     plan, labels, manifest_path = load_directory_contract(root, plan_path, labels_path)
-    assert len(labels) == 25, f"Expected exactly 25 labels, got {len(labels)}"
-    assert list(plan.people) == ["P01", "P02", "P03"], f"Expected P01-P03, got {plan.people}"
-    assert plan.clips_per_label == 6, f"Expected 6 clips per label, got {plan.clips_per_label}"
+    allowed_people = set(plan.people)
+    expected_clips = args.expected_clips if args.expected_clips is not None else len(plan.people) * len(labels) * plan.clips_per_label
+    print(f"Contract: {len(labels)} labels, {len(plan.people)} people ({sorted(allowed_people)}), {plan.clips_per_label} clips/label -> expected {expected_clips} clips")
 
     # 2. Run structural validation gate
     result = validate_recording_tree(root, plan, labels, strict_counts=True)
@@ -48,7 +57,7 @@ def main() -> None:
 
     # 3. Find all video files
     video_paths = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in {".mov", ".mp4"})
-    assert len(video_paths) == 450, f"Expected exactly 450 videos, got {len(video_paths)}"
+    assert len(video_paths) == expected_clips, f"Expected exactly {expected_clips} videos, got {len(video_paths)}"
     print(f"Found {len(video_paths)} videos in {root}")
 
     # Ensure no .bak files in dataset
@@ -62,12 +71,10 @@ def main() -> None:
     rows = []
 
     for p in video_paths:
-        # Check person and label
         parts = p.relative_to(root).parts
         assert len(parts) == 3, f"Unexpected path structure: {p}"
         person, label_dir, filename = parts
-        assert person in {"P01", "P02", "P03"}, f"Invalid person: {person}"
-        assert person != "P04", f"P04 must not exist in dataset: {p}"
+        assert person in allowed_people, f"Invalid person {person}, not in allowed {allowed_people}: {p}"
         
         # NFC label
         nfc_label = normalise_label(label_dir)
@@ -114,8 +121,8 @@ def main() -> None:
             "duration": round(duration, 4),
         })
 
-    assert len(seen_hashes) == 450, f"Expected 450 unique hashes, got {len(seen_hashes)}"
-    print("450 unique paths and 450 unique SHA-256 hashes: PASS")
+    assert len(seen_hashes) == expected_clips, f"Expected {expected_clips} unique hashes, got {len(seen_hashes)}"
+    print(f"{expected_clips} unique paths and {expected_clips} unique SHA-256 hashes: PASS")
     print("100% videos are 1920x1080 ~60fps and duration in [0.5, 10.0]s: PASS")
 
     # Write CSV
@@ -135,29 +142,7 @@ def main() -> None:
     print(f"SHA-256 {plan_path}: {plan_sha}")
     print(f"SHA-256 {out_csv}: {csv_sha}")
 
-    # Verify trimmed clip specifically
-    trimmed_path = root / "P02" / "Hôm nay bạn khỏe không" / "002.MOV"
-    orig_bak_path = Path("recordings_v1/P02/Hôm nay bạn khỏe không/002.MOV.bak")
-    
-    cap_trim = cv2.VideoCapture(str(trimmed_path.resolve()))
-    fps_trim = cap_trim.get(cv2.CAP_PROP_FPS)
-    frames_trim = cap_trim.get(cv2.CAP_PROP_FRAME_COUNT)
-    dur_trim = frames_trim / fps_trim
-    cap_trim.release()
-
-    cap_bak = cv2.VideoCapture(str(orig_bak_path.resolve()))
-    fps_bak = cap_bak.get(cv2.CAP_PROP_FPS)
-    frames_bak = cap_bak.get(cv2.CAP_PROP_FRAME_COUNT)
-    dur_bak = frames_bak / fps_bak
-    cap_bak.release()
-
-    print(f"Trimmed clip {trimmed_path}: {dur_trim:.4f}s (Frames: {frames_trim}, FPS: {fps_trim:.2f})")
-    print(f"Backup clip {orig_bak_path}: {dur_bak:.4f}s (Frames: {frames_bak}, FPS: {fps_bak:.2f})")
-    assert 9.4 <= dur_trim <= 9.6, f"Expected trimmed clip ~9.51s, got {dur_trim}"
-    assert 10.0 <= dur_bak <= 10.1, f"Expected backup clip ~10.055s, got {dur_bak}"
-    print("Trimmed clip verification: PASS")
-
-    print("=== PHASE 2 COMPLETE: DATASET FULLY LOCKED ===")
+    print("=== DATASET FULLY VERIFIED AND LOCKED ===")
 
 
 if __name__ == "__main__":
