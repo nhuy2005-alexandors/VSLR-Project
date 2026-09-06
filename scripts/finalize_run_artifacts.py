@@ -113,9 +113,21 @@ def build_run_manifest(
     )
     cmd_ship = (
         f"vslr-train --data-dir {data_dir} --recording-plan {plan_posix} --labels-file {labels_posix} "
-        f"--cache-dir {cache_dir} --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 "
+        f"--cache-dir {cache_dir} --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 2 "
         f"--model-dir {norm_run_dir}"
     )
+    if (run_dir / "commands.txt").is_file():
+        try:
+            cmds_text = (run_dir / "commands.txt").read_text(encoding="utf-8")
+            for block in cmds_text.split("\n\n"):
+                lines = [line.strip() for line in block.splitlines() if line.strip()]
+                if len(lines) >= 2:
+                    if "LOSO Command:" in lines[0]:
+                        cmd_loso = lines[1]
+                    elif "Ship Command:" in lines[0]:
+                        cmd_ship = lines[1]
+        except Exception:
+            pass
 
     model_cfg = metrics_data.get("model", {})
     py_ver = python_version.replace("Python", "").strip()

@@ -116,3 +116,11 @@ Quyết định kiến trúc + LÝ DO. Tích lũy, không xóa.
 - **Trade-offs**: camera crop mất hông không được lợi từ gate và dùng hành vi presence cũ. Ngưỡng là
   heuristic đã kiểm trên 450 sequence train, 25 clip P01 và 3 clip ngoài; vẫn cần nghiệm thu webcam
   nhiều người trước khi coi là ổn định.
+
+## ADR-015: Khóa bộ 24 nhãn 4 người ký, loại bỏ hoàn toàn "Hẹn gặp lại" để ngăn data leakage
+
+- **Date**: 2026-09-07
+- **Context**: Tại nhãn `Hẹn gặp lại`, phát hiện 2 clip của P04 trùng 100% hash byte với clip của P02 (`001.MOV` vs `004.mov`, `002.MOV` vs `003.mov`). Trong đánh giá chéo Leave-One-Signer-Out (LOSO), nếu giữ P04 thì khi fold P04 được kiểm thử, mô hình đã học clip của P04 qua P02 lúc huấn luyện, gây rò rỉ dữ liệu (data leakage) nghiêm trọng.
+- **Decision**: Loại bỏ hoàn toàn nhãn `Hẹn gặp lại` khỏi tập nhãn; bảo lưu nguyên vẹn thứ tự và mã hóa NFC của 24 nhãn còn lại (`dataset/labels_v2_24.txt`). Thiết lập cây dữ liệu dẫn xuất `dataset/recordings_v2_4x24/` (576 clip độc nhất, 576 SHA-256 khác nhau) và recording plan `dataset/recording_plan_v2_4x24.json`. Khởi tạo landmark cache riêng `dataset/processed/landmark_cache_v2_4x24/`. Các script audit và finalize được tham số hóa linh hoạt theo `expected_clips=576, labels=24, folds=4`.
+- **Trade-offs**: Tập từ vựng giảm từ 25 xuống 24 cử chỉ. Đổi lại, dữ liệu 4 người ký hoàn toàn sạch, triệt tiêu leakage, cho phép đo đạc LOSO 4-fold khách quan đạt độ chính xác 90.97% mà không bị ô nhiễm chéo. Model cũ trong `models/` được giữ nguyên cho đến khi Root duyệt.
+

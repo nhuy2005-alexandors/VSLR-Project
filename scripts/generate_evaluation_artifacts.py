@@ -87,7 +87,7 @@ def main() -> None:
     ax.set_yticklabels(labels, fontsize=8)
     ax.set_xlabel("Predicted Label", fontsize=12, fontweight="bold")
     ax.set_ylabel("True Label", fontsize=12, fontweight="bold")
-    ax.set_title(f"Confusion Matrix — LOSO 3-Folds ({len(all_predictions)} clips)", fontsize=14, fontweight="bold")
+    ax.set_title(f"Confusion Matrix — LOSO {len(folds)}-Folds ({len(all_predictions)} clips)", fontsize=14, fontweight="bold")
 
     # Annotate numbers
     for r in range(num_labels):
@@ -143,42 +143,62 @@ def main() -> None:
     worst = report.get("worst_fold", {})
     worst_person = worst.get("person", "-")
     worst_acc = worst.get("accuracy", 0.0) * 100
+    total_correct = sum(1 for p in all_predictions if p["correct"])
+    total_tested = len(all_predictions)
+
+    from collections import Counter
+    confusion_pairs = Counter()
+    for p in all_predictions:
+        if not p["correct"]:
+            confusion_pairs[(p["label"], p["predicted"])] += 1
 
     lines = [
-        f"# Báo cáo Đánh giá Thử nghiệm LOSO 3-Signers",
+        f"# Tóm tắt Đánh giá Thử nghiệm LOSO {len(folds)}-Fold",
         f"",
-        f"- **Thời gian chạy**: `{report.get('timestamp', '-')}`",
-        f"- **Chế độ**: Leave-One-Signer-Out ({len(folds)} folds: {', '.join(f['held_out_person'] for f in folds)})",
-        f"- **Số nhãn**: {num_labels} cử chỉ",
-        f"- **Tổng số clip test**: {len(all_predictions)} clips ({len(folds)} x {num_labels} x 6)",
-        f"- **Độ chính xác Macro Mean**: **{macro_mean:.2f}%**",
-        f"- **Độ chính xác Pooled**: **{pooled:.2f}%**",
+        f"- **Thời gian đánh giá**: {report.get('created_at', report.get('timestamp', '-'))}",
+        f"- **Tổng số clip test**: {total_tested} clips ({len(folds)} người ký x {num_labels} cử chỉ x 6 clips)",
+        f"- **Số clip đoán đúng**: {total_correct} / {total_tested}",
+        f"- **Pooled Accuracy**: {pooled:.2f}%",
+        f"- **Macro Mean Accuracy**: {macro_mean:.2f}%",
         f"- **Fold thấp nhất**: `{worst_person}` ({worst_acc:.2f}%)",
+        f"- **Trạng thái External Review**: PENDING",
         f"",
-        f"## 1. Kết quả từng Fold",
+        f"## Kết quả từng Fold",
         f"",
-        f"| Fold (Held-out) | Train Clips | Test Clips | Val Accuracy | Val Loss (CE) |",
-        f"|---|---|---|---|---|",
+        f"| Fold (Người ký kiểm thử) | Số clip test | Số clip đúng | Accuracy | Val Loss (CE) |",
+        f"|---|:---:|:---:|:---:|:---:|",
     ]
     for f in folds:
+        f_correct = sum(1 for p in f["predictions"] if p["correct"])
         lines.append(
-            f"| **{f['held_out_person']}** | {f['train_clips']} | {f['test_clips']} | **{f['test_accuracy'] * 100:.2f}%** | {f['test_loss']:.4f} |"
+            f"| Fold {f['held_out_person']} | {f['test_clips']} | {f_correct} | {f['test_accuracy'] * 100:.2f}% | {f['test_loss']:.4f} |"
         )
 
     lines.extend([
         f"",
-        f"## 2. Top 5 cử chỉ có độ chính xác thấp nhất",
+        f"## Độ chính xác từng Cử chỉ (Xếp từ thấp đến cao)",
         f"",
-        f"| Cử chỉ | Số clip đúng | Tổng clip test | Tỉ lệ đúng |",
-        f"|---|---|---|---|",
+        f"| Cử chỉ | Đúng / Tổng | Tỉ lệ (%) |",
+        f"|---|:---:|:---:|",
     ])
-    for l in sorted_labels[:5]:
+    for l in sorted_labels:
         c = per_label_counts[l]
-        lines.append(f"| `{l}` | {c['correct']} | {c['total']} | **{c['correct']/c['total']*100:.1f}%** |")
+        lines.append(f"| {l} | {c['correct']} / {c['total']} | {c['correct']/c['total']*100:.1f}% |")
 
     lines.extend([
         f"",
-        f"## 3. Biểu đồ trực quan",
+        f"## Toàn bộ {len(confusion_pairs)} Cặp Nhầm Lẫn (Tổng cộng {sum(confusion_pairs.values())} clips sai)",
+        f"",
+        f"| STT | Cử chỉ thực tế (True Label) | Dự đoán nhầm sang (Predicted) | Số clips |",
+        f"|:---:|---|---|:---:|",
+    ])
+    for idx, ((true_lbl, pred_lbl), cnt) in enumerate(confusion_pairs.most_common(), 1):
+        lines.append(f"| {idx:2d} | {true_lbl} | {pred_lbl} | {cnt} |")
+    lines.append(f"| **Tổng** | **{len(confusion_pairs)} hướng nhầm lẫn** | — | **{sum(confusion_pairs.values())}** |")
+
+    lines.extend([
+        f"",
+        f"## Biểu đồ trực quan",
         f"",
         f"- Đường cong Huấn luyện: `training_curves.png`",
         f"- Ma trận nhầm lẫn: `confusion_matrix.png`",

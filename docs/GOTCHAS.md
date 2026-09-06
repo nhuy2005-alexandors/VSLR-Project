@@ -164,3 +164,18 @@ Bẫy đã gặp. Tích lũy, không xóa. Gặp bẫy mới → append.
 - **Symptom**: checkpoint khai `model_architecture_version=999` nhưng vẫn load vì tensor shape khớp.
 - **Cause**: `load_checkpoint` chỉ kiểm feature version; metadata architecture được ghi nhưng không có consumer.
 - **Avoidance/fix**: thiếu architecture key được hiểu là topology gốc v1; version khác `MODEL_ARCHITECTURE_VERSION` luôn raise. Không có override vì code hiện tại không thể biết semantics của topology tương lai dù shape trùng.
+
+## PyTorch DataLoader cạn Shared Memory / Paging File trên Windows (Lỗi 1455)
+
+- **Symptom**: `RuntimeError: [enforce fail at ..\c10\core\impl\alloc_cpu.cpp:72] data. DefaultCPUAllocator: can't allocate memory ... Error code 1455 (The paging file is too small for this operation to complete.)` hoặc worker bị killed giữa các fold LOSO hoặc trong Ship training.
+- **Cause**: Trên Windows, PyTorch multiprocessing không có `fork()` mà dùng `spawn()` và truyền tensor qua file mapping (`CreateFileMapping`). Khi chạy nhiều fold liên tiếp với `persistent_workers=True`, các shared memory mapping không được giải phóng kịp thời, tích lũy vượt quá giới hạn cam kết bộ nhớ ảo (commit limit). Ngoài ra, khi bộ nhớ ảo rỗi thấp (< 8 GB), 4 workers + 1 main process chiếm tới ~15 GB virtual address space.
+- **Avoidance/fix**: 
+  1. Ở cuối mỗi hàm `train_model` và sau mỗi fold LOSO, thực hiện xóa tường minh `del train_loader`, `del val_loader`, `del fold_model`, gọi `gc.collect()` và `torch.cuda.empty_cache()` để đóng và thu hồi toàn bộ file mapping ngay lập tức.
+  2. Với các máy có RAM/Pagefile giới hạn, sử dụng `--num-workers 2`. `num_workers` cố ý không nằm trong `training_signature` và sampling được seed theo vị trí dữ liệu nên kết quả và chữ ký huấn luyện hoàn toàn đồng nhất.
+
+## Sai lệch đường dẫn tương đối vs tuyệt đối trong Landmark Cache Key
+
+- **Symptom**: Script trích xuất song song `parallel_extract_cache.py` báo hoàn thành 576/576 clip vào cache, nhưng khi chạy `vslr-check` hoặc `vslr-train` thì 100% clip bị cache miss và phải extract lại từ đầu.
+- **Cause**: `parallel_extract_cache.py` truyền đường dẫn tương đối `dataset/recordings_v2_4x24/...` vào `compute_cache_key`, trong khi `discover_clips` bên trong pipeline chuẩn dùng `path.resolve()` (đường dẫn tuyệt đối `D:/Dev/Workspaces/...`). Dẫn đến hàm băm SHA-1 của cache key bị lệch nhau dù cùng một file video.
+- **Avoidance/fix**: Luôn gọi `f.resolve()` để chuẩn hóa đường dẫn tuyệt đối trước khi tính cache key hoặc trích xuất landmark.
+

@@ -1,8 +1,25 @@
 # Checkpoint — VSLR
 
-_Cập nhật: 2026-08-28_
+_Cập nhật: 2026-09-07_
 
 ## Done
+
+- **Hoàn thành Huấn luyện & Đánh giá Model 24 cử chỉ 4 người ký (P01, P02, P03, P04)**:
+  - Thư mục run: `runs/v2-4signers-24-20260907-005546/`.
+  - Manifest chuẩn: `dataset/labels_v2_24.txt` (loại bỏ duy nhất nhãn `Hẹn gặp lại` để triệt tiêu data leakage do file hash trùng giữa P02 và P04; giữ nguyên thứ tự 24 nhãn chuẩn NFC).
+  - Plan 4x24: `dataset/recording_plan_v2_4x24.json` (4 người x 24 nhãn x 6 clip = 576 clips, 576 SHA-256 độc nhất).
+  - Landmark cache độc lập: `dataset/processed/landmark_cache_v2_4x24/`.
+  - Kết quả LOSO 4-fold (unaugmented test):
+    - **Pooled Accuracy: 90.97% (524 / 576 clips đúng)**.
+    - **Macro Mean Accuracy: 90.97%**.
+    - Fold P01: 140 / 144 (97.22%), loss 0.1274.
+    - Fold P02: 134 / 144 (93.06%), loss 0.3197.
+    - Fold P03: 138 / 144 (95.83%), loss 0.2642.
+    - Fold P04: 112 / 144 (77.78%), loss 0.9171 (worst fold).
+  - Model Ship: Đã huấn luyện trên toàn bộ 576 clips (`gesture_lstm.pt`, SHA-256 `5e202eb9108c06e446da5ae1d27aaebcec7e14cb2e72a9c233c4ac99da245b83`).
+  - Khóa ba chiều: `training_signature = 43316055f78bbf2e83c806396d5791d06faeb57b62bef13be17d77095a9c8675` khớp 100% giữa `loso_report.json`, `metrics.json` và `gesture_lstm.pt`.
+  - Machine Audit: `python scripts/audit_run_artifacts.py` đạt **PASSED (ALL CRITERIA VERIFIED)** exit code 0.
+  - Toàn bộ artifacts và visual charts (`training_curves.png`, `confusion_matrix.png`, `per_label_accuracy.png`, `evaluation_report.md`, `REPORT_FOR_AGENT.md`, `RUN_MANIFEST.json`, `SHA256SUMS.txt`) đã niêm phong độc lập trong thư mục run. Không ghi đè model gốc tại `models/`.
 
 - **Feature extraction v3**: MediaPipe Holistic, 67 landmark × 3 + 2 presence channels trái/phải = 203 features, sequence 60; presence-aware bridge/resample/augment không tạo ghost hand; z group-local (pose theo hip midpoint, tay theo wrist). Mỗi file video có instance MediaPipe riêng; cache khóa theo SHA-256 bytes nguồn + path/mtime/dimension/`FEATURES_VERSION=3`.
 - **Model**: BiLSTM pooling đúng `fwd-last + bwd-first`; checkpoint giữ metadata `pooling`/`features_version`/`model_architecture_version`. Artifact lệch feature version bị chặn mặc định; architecture version lạ luôn bị từ chối vì cùng tensor shape vẫn có thể khác semantics.
