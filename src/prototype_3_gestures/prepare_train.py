@@ -865,6 +865,14 @@ def train_model(
                 line += f" | held-out signer {row['val_accuracy']:.1%}/{row['val_loss_plain_ce']:.4f}"
             print(line)
 
+    del train_loader
+    if val_loader is not None:
+        del val_loader
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     return model, history
 
 
@@ -1135,6 +1143,12 @@ def main() -> None:
                 }
             )
             print(f"  fold '{val_person}' accuracy {final['val_accuracy']:.1%} on {len(val_idx)} real clips")
+            del fold_model
+            del fold_loader
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         accuracies = [fold["test_accuracy"] for fold in folds]
         worst = min(folds, key=lambda fold: fold["test_accuracy"])
