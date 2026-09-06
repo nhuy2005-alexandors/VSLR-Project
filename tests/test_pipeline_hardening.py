@@ -10,7 +10,12 @@ from unittest import mock
 import numpy as np
 
 from prototype_3_gestures.prepare_train import Clip, validate_recording_tree
-from prototype_3_gestures.realtime import Segment, SegmentTracker, classify_segment_frames
+from prototype_3_gestures.realtime import (
+    Segment,
+    SegmentTracker,
+    classify_segment_frames,
+    gesture_activity_from_features,
+)
 from prototype_3_gestures.sentence import edit_distance, parse_sentence_manifest, word_error_rate
 from prototype_3_gestures.vsl3.features import (
     FEATURE_DIM,
@@ -277,6 +282,91 @@ class PresencePreprocessingTests(unittest.TestCase):
 
 
 class SegmentationHardeningTests(unittest.TestCase):
+    @staticmethod
+    def _visible_hand_frame(*, wrist_y: float, hip_y: float = 1.0) -> np.ndarray:
+        frame = np.zeros(FEATURE_DIM, dtype=np.float32)
+        frame[23 * 3 + 1] = hip_y
+        frame[25 * 3 + 1] = wrist_y
+        frame[-2] = 1.0
+        return frame
+
+    def test_visible_lowered_hand_is_not_gesture_activity(self):
+        lowered = self._visible_hand_frame(wrist_y=0.7)
+        raised = self._visible_hand_frame(wrist_y=0.2)
+
+        self.assertFalse(gesture_activity_from_features(lowered, True, False))
+        self.assertTrue(gesture_activity_from_features(raised, True, False))
+
+    def test_activity_gate_falls_back_to_presence_without_valid_hip_pose(self):
+        frame = np.zeros(FEATURE_DIM, dtype=np.float32)
+        frame[25 * 3 + 1] = 0.2
+        frame[-2] = 1.0
+
+        self.assertTrue(gesture_activity_from_features(frame, True, False))
+
+    def test_visible_lowered_hands_close_without_hitting_max_seconds(self):
+        tracker = SegmentTracker(word_gap=0.45, max_seconds=5.0, min_active_seconds=0.2)
+        lowered = self._visible_hand_frame(wrist_y=0.7)
+        raised = self._visible_hand_frame(wrist_y=0.2)
+        completed = []
+
+        for index in range(6):
+            completed.append(
+                tracker.feed(
+                    True, lowered, index * 0.1, True, False, gesture_active=False
+                )
+            )
+        for index in range(6, 16):
+            completed.append(
+                tracker.feed(
+                    True, raised, index * 0.1, True, False, gesture_active=True
+                )
+            )
+        for index in range(16, 23):
+            completed.append(
+                tracker.feed(
+                    True, lowered, index * 0.1, True, False, gesture_active=False
+                )
+            )
+
+        segments = [segment for segment in completed if segment is not None]
+        self.assertEqual(len(segments), 1)
+        self.assertFalse(segments[0].forced)
+        self.assertAlmostEqual(segments[0].start_time, 0.6)
+        self.assertAlmostEqual(segments[0].active_end_time, 1.5)
+        active, _, _, times = segments[0].active_frames()
+        self.assertEqual(len(active), 20)
+        self.assertAlmostEqual(times[0], 0.0)
+        self.assertAlmostEqual(times[-1], 1.9)
+
+    def test_no_hand_idle_is_not_added_as_model_context(self):
+        tracker = SegmentTracker(word_gap=0.45, max_seconds=5.0, min_active_seconds=0.2)
+        absent = np.zeros(FEATURE_DIM, dtype=np.float32)
+        raised = self._visible_hand_frame(wrist_y=0.2)
+
+        for index in range(6):
+            self.assertIsNone(
+                tracker.feed(
+                    False, absent, index * 0.1, False, False, gesture_active=False
+                )
+            )
+        for index in range(6, 12):
+            self.assertIsNone(
+                tracker.feed(
+                    True, raised, index * 0.1, True, False, gesture_active=True
+                )
+            )
+        segment = None
+        for index in range(12, 19):
+            done = tracker.feed(
+                False, absent, index * 0.1, False, False, gesture_active=False
+            )
+            segment = done or segment
+
+        self.assertIsNotNone(segment)
+        _, _, _, times = segment.active_frames()
+        self.assertAlmostEqual(times[0], 0.6)
+
     def test_idle_blip_does_not_close_as_active_segment_when_min_evidence_is_set(self):
         tracker = SegmentTracker(word_gap=0.45, max_seconds=5.0, min_active_seconds=0.2)
         frame = np.zeros(FEATURE_DIM, dtype=np.float32)

@@ -15,7 +15,13 @@ import cv2
 import numpy as np
 import torch
 
-from .realtime import Segment, SegmentDecision, SegmentTracker, decide_segment
+from .realtime import (
+    Segment,
+    SegmentDecision,
+    SegmentTracker,
+    decide_segment,
+    gesture_activity_from_features,
+)
 from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import ClipExtractionError, HolisticExtractor, require_valid_video_fps
 from .vsl3.model import load_checkpoint
@@ -179,6 +185,9 @@ def infer_sentence_clip(
                     break
                 last_frame_time = frame_index / fps
                 obs = extractor.process_frame(frame)
+                gesture_active = gesture_activity_from_features(
+                    obs.features, obs.left_hand_present, obs.right_hand_present
+                )
                 handle(
                     tracker.feed(
                         obs.hands_present,
@@ -186,6 +195,7 @@ def infer_sentence_clip(
                         last_frame_time,
                         obs.left_hand_present,
                         obs.right_hand_present,
+                        gesture_active=gesture_active,
                     )
                 )
                 frame_index += 1

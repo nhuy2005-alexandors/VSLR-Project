@@ -70,6 +70,21 @@ Ràng buộc: `predictions[]` ở 540 clip × 5 fold = 540 dòng (mỗi clip tes
 Mục tiêu là "múa từ từ thành câu hoàn chỉnh". Pipeline train vẫn đo clip một nhãn; `vslr-sentence`
 đã bổ sung phép đo offline cho câu ghép. Metric thật còn chờ dữ liệu câu/checkpoint v3.
 
+### Sửa biên tay nghỉ vẫn được MediaPipe nhìn thấy
+
+Presence của MediaPipe chỉ nói bàn tay còn nhìn thấy trong ảnh, không nói người ký đang thực hiện
+cử chỉ. Khi người đứng toàn thân và hạ tay dọc hông, hai tay vẫn được detect liên tục; dùng presence
+làm activity khiến segment chạm `--max-seconds` dù người đã kết thúc.
+
+- [x] Camera và `vslr-sentence` dùng chung activity gate theo vị trí cổ tay so với hông.
+- [x] Một tay được coi là active khi cổ tay cao hơn hông ít nhất 0,5 lần bề rộng vai đã
+  chuẩn hóa. Chỉ cần một tay active là frame active.
+- [x] Nếu pose/hông không đủ để tính gate, fallback về hand presence để không âm thầm bỏ cử chỉ.
+- [x] Tay hạ vẫn được giữ là observation thật nhưng không được mở segment, kéo dài active duration,
+  hoặc ngăn `word_gap` đóng segment.
+- [x] Chỉ giữ tối đa 1,0 giây trước frame active đầu và 0,5 giây sau frame active cuối làm
+  transition context cho model; idle dài hơn bị loại. Khoảng nghỉ ngắn bên trong cử chỉ vẫn được giữ.
+
 Tức phần được đo và phần được demo là hai thứ khác nhau — đúng lỗi mà repo tham chiếu `photienanh/Vietnamese-Sign-Language-Recognition` mắc phải (demo trông mượt vì không bao giờ nói "không biết", và không có con số nào tồn tại).
 
 ### `vslr-sentence --clip path.mov [--expect "Xin chào,Cảm ơn"]`

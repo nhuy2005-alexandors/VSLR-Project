@@ -104,3 +104,15 @@ Quyết định kiến trúc + LÝ DO. Tích lũy, không xóa.
 - **Context**: cây `dataset/raw/` hiện chứa bộ legacy không có signer ID. Tạo thư mục thủ công cho 4 người × 30 nhãn dễ thiếu cặp, sai Unicode hoặc trộn dữ liệu cũ. Số lớp tương lai có thể là 20, 25 hay hơn 30 nên không được viết cứng vào code.
 - **Decision**: chốt thứ tự 30 nhãn V1 trong `dataset/labels.txt`. `vslr-init-dataset` đọc manifest và tạo `DIR/P01..P04/<nhãn>/`; mặc định 6 clip mỗi cặp nhưng chỉ tạo thư mục, không tạo placeholder, di chuyển hoặc ghi đè video. Bộ mới dùng `dataset/recordings_v1`; label và person được pipeline suy chính xác từ đường dẫn.
 - **Trade-offs**: đổi tập nhãn phải dùng manifest/phiên bản dữ liệu mới. Bốn người đủ để chạy LOSO phục vụ đánh giá prototype và demo, nhưng chưa đủ để tuyên bố tổng quát hóa mạnh cho người ký mới.
+
+## ADR-014: Activity của cử chỉ khác với hand presence
+
+- **Date**: 2026-09-03
+- **Context**: webcam và video từ điển vẫn thấy hai bàn tay khi người hạ tay dọc thân. Presence-only
+  làm segment không đóng và thường chạm cap 5 giây.
+- **Decision**: dùng cổ tay cao hơn đường hông trung bình ít nhất 0,5 shoulder-width làm activity;
+  pose thiếu thì fallback presence. State machine dùng activity, model input vẫn giữ presence thật.
+  Giữ rolling context tối đa 1,0 giây trước và 0,5 giây sau active.
+- **Trade-offs**: camera crop mất hông không được lợi từ gate và dùng hành vi presence cũ. Ngưỡng là
+  heuristic đã kiểm trên 450 sequence train, 25 clip P01 và 3 clip ngoài; vẫn cần nghiệm thu webcam
+  nhiều người trước khi coi là ổn định.

@@ -82,6 +82,8 @@ def build_run_manifest(
     all_preds: list[dict],
     artifacts_info: list[dict],
     finalizer_commit: str = "",
+    data_dir: str = "dataset/recordings_v2_4x24",
+    cache_dir: str = "dataset/processed/landmark_cache_v2_4x24",
 ) -> dict:
     """Construct RUN_MANIFEST.json with verified provenance and dynamic git state."""
     # Analyze git worktree status dynamically
@@ -102,14 +104,16 @@ def build_run_manifest(
     )
 
     norm_run_dir = run_dir.as_posix()
+    labels_posix = labels_file.as_posix()
+    plan_posix = plan_file.as_posix()
     cmd_loso = (
-        f"vslr-train --data-dir dataset/recordings_v1_p123 --recording-plan dataset/recording_plan_p123.json "
-        f"--loso --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 "
+        f"vslr-train --data-dir {data_dir} --recording-plan {plan_posix} --labels-file {labels_posix} "
+        f"--cache-dir {cache_dir} --loso --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 "
         f"--model-dir {norm_run_dir}"
     )
     cmd_ship = (
-        f"vslr-train --data-dir dataset/recordings_v1_p123 --recording-plan dataset/recording_plan_p123.json "
-        f"--epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 "
+        f"vslr-train --data-dir {data_dir} --recording-plan {plan_posix} --labels-file {labels_posix} "
+        f"--cache-dir {cache_dir} --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 "
         f"--model-dir {norm_run_dir}"
     )
 
@@ -125,8 +129,8 @@ def build_run_manifest(
         "tracked_tree_clean": tracked_tree_clean,
         "worktree_clean": worktree_clean,
         "untracked_at_start": untracked_files,
-        "data_dir": "dataset/recordings_v1_p123",
-        "recording_plan": "dataset/recording_plan_p123.json",
+        "data_dir": data_dir,
+        "recording_plan": plan_posix,
         "labels_sha256": get_sha256(labels_file) if labels_file.is_file() else "",
         "recording_plan_sha256": get_sha256(plan_file) if plan_file.is_file() else "",
         "dataset_manifest_sha256": get_sha256(manifest_csv) if manifest_csv.is_file() else "",
@@ -655,6 +659,8 @@ def main() -> None:
         all_preds=all_preds,
         artifacts_info=artifacts_info,
         finalizer_commit=finalizer_commit,
+        data_dir=args.data_dir,
+        cache_dir=args.cache_dir,
     )
 
     manifest_json_path = run_dir / "RUN_MANIFEST.json"

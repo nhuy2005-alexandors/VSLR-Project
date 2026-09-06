@@ -112,3 +112,23 @@ vslr-camera --no-tts      # can camera, chua chay duoc trong moi truong nay
 - Sau cắt cưỡng bức ở `--max-seconds`, đuôi cử chỉ **bị bỏ**. Nếu demo thấy cử chỉ chậm bị nhận sai, tăng `--max-seconds` trước khi nghi model.
 - Phân phối augment đã đổi (thêm warp), nên số đo trước và sau thay đổi này không so sánh trực tiếp được.
 - `--word-gap` vẫn nối frame tay hạ vào đuôi segment — lệch với lúc train, xem mục "Giữ nguyên có chủ ý".
+
+## Activity gate cho tay nghỉ vẫn nhìn thấy
+
+MediaPipe có thể tiếp tục trả hand landmarks khi người đứng hạ tay dọc thân. Presence vì vậy không
+còn là tín hiệu mở/đóng segment. `gesture_activity_from_features()` dùng landmark đã chuẩn hóa và
+coi frame active khi ít nhất một cổ tay cao hơn đường hông trung bình `0,5` lần bề rộng vai. Nếu hông
+không nằm trong khung hoặc landmark pose không hợp lệ, hàm fallback về presence để camera crop nửa
+người không bị mất toàn bộ cử chỉ.
+
+`SegmentTracker` giữ riêng activity mask và presence mask. Activity điều khiển state machine,
+`active_end_time`, `word_gap` và `--max-seconds`; presence vẫn điều khiển dữ liệu bàn tay thực tế đưa
+vào model. Một rolling buffer giữ tối đa 1,0 giây tay-nghỉ có quan sát trước khi active và tối đa 0,5
+giây sau active làm transition context. Frame hoàn toàn không thấy tay không được đưa vào pre-roll.
+
+Verify 2026-09-03:
+
+- `python -m pytest -q`: 123 passed, 45 subtests passed.
+- Ba clip QIPEDC ngoài tập train: 3/3 đúng (`Siêu thị` 98,5%, `Tạm biệt` 82,9%, `Xin lỗi` 97,4%).
+- Một clip `001` của mỗi 25 nhãn P01: 25/25 đúng, không segment nào `forced`.
+- Chưa verify camera thật sau thay đổi; đây là bước nghiệm thu tiếp theo.

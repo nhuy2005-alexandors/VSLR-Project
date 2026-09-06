@@ -16,12 +16,14 @@ import torch
 from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import (
     FEATURE_DIM,
+    LANDMARK_FEATURE_DIM,
     LEFT_PRESENCE_INDEX,
     MAX_BRIDGE_GAP_SECONDS,
+    N_HAND,
+    N_POSE,
     RIGHT_PRESENCE_INDEX,
     HolisticExtractor,
     preprocess_sequence,
-    trim_active_frames,
 )
 from .vsl3.model import load_checkpoint, predict_sequence
 from .vsl3.reject import (
@@ -32,6 +34,46 @@ from .vsl3.reject import (
 )
 
 configure_utf8_stdio()
+
+
+GESTURE_ACTIVITY_WRIST_ABOVE_HIP = 0.5
+GESTURE_PRE_ROLL_SECONDS = 1.0
+GESTURE_POST_ROLL_SECONDS = 0.5
+
+
+def gesture_activity_from_features(
+    features: np.ndarray,
+    left_hand_present: bool,
+    right_hand_present: bool,
+    *,
+    wrist_above_hip: float = GESTURE_ACTIVITY_WRIST_ABOVE_HIP,
+) -> bool:
+    """Distinguish a signing hand from a visible hand resting beside the body."""
+
+    values = np.asarray(features, dtype=np.float32).reshape(-1)
+    if values.size < LANDMARK_FEATURE_DIM:
+        return bool(left_hand_present or right_hand_present)
+    points = values[:LANDMARK_FEATURE_DIM].reshape(-1, 3)
+
+    def valid(index: int) -> bool:
+        return bool(np.any(np.abs(points[index]) > 1e-8))
+
+    hip_y = [float(points[index, 1]) for index in (23, 24) if valid(index)]
+    scores: list[float] = []
+    if hip_y:
+        hip_line = float(np.mean(hip_y))
+        for present, hand_wrist_index in (
+            (left_hand_present, N_POSE),
+            (right_hand_present, N_POSE + N_HAND),
+        ):
+            if present and valid(hand_wrist_index):
+                scores.append(hip_line - float(points[hand_wrist_index, 1]))
+
+    if not scores:
+        # A cropped camera may not contain the hips. Preserve the old presence behavior instead of
+        # silently discarding every gesture when the body-relative gate cannot be evaluated.
+        return bool(left_hand_present or right_hand_present)
+    return max(scores) >= wrist_above_hip
 
 
 def speak_text(text: str) -> None:
@@ -79,6 +121,7 @@ class Segment:
     timestamps: list[float] = field(default_factory=list)
     left_hand_present: list[bool] = field(default_factory=list)
     right_hand_present: list[bool] = field(default_factory=list)
+    gesture_active: list[bool] = field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -106,20 +149,38 @@ class Segment:
             right = [False] * n_frames
             times = list(self.timestamps) if len(self.timestamps) == n_frames else list(range(n_frames))
             return list(self.features), left, right, times
-        times = list(self.timestamps) if len(self.timestamps) == n_frames else list(range(n_frames))
-        if not any(left[index] or right[index] for index in range(n_frames)):
-            return [], [], [], []
-        # Only remove no-hand padding outside the gesture. Internal gaps are meaningful input to
-        # presence-aware preprocessing: it may bridge a short bounded gap or preserve a long gap
-        # as missing. The helper is also used by offline video extraction.
-        trimmed, trimmed_left, trimmed_right, trimmed_times = trim_active_frames(
-            np.asarray(self.features, dtype=np.float32), left, right, times
+        has_timestamps = len(self.timestamps) == n_frames
+        times = list(self.timestamps) if has_timestamps else list(range(n_frames))
+        has_explicit_activity = len(self.gesture_active) == n_frames
+        activity = (
+            list(self.gesture_active)
+            if has_explicit_activity
+            else [left[index] or right[index] for index in range(n_frames)]
         )
+        if not any(activity):
+            return [], [], [], []
+        # Trim resting frames using the activity gate while preserving the real hand-presence masks
+        # inside the gesture. Short pauses and MediaPipe gaps remain meaningful model input.
+        active_indices = [index for index, is_active in enumerate(activity) if is_active]
+        start = active_indices[0]
+        stop = active_indices[-1] + 1
+        if has_timestamps and has_explicit_activity:
+            context_start = times[start] - GESTURE_PRE_ROLL_SECONDS
+            context_stop = times[stop - 1] + GESTURE_POST_ROLL_SECONDS
+            epsilon = 1e-9
+            while start > 0 and times[start - 1] + epsilon >= context_start:
+                start -= 1
+            while (
+                stop < n_frames
+                and times[stop] <= context_stop + epsilon
+                and (left[stop] or right[stop])
+            ):
+                stop += 1
         return (
-            [frame for frame in trimmed],
-            trimmed_left.tolist(),
-            trimmed_right.tolist(),
-            trimmed_times.tolist(),
+            list(self.features[start:stop]),
+            left[start:stop],
+            right[start:stop],
+            times[start:stop],
         )
 
 
@@ -235,7 +296,9 @@ class SegmentTracker:
         self.segment_times: list[float] = []
         self.segment_left: list[bool] = []
         self.segment_right: list[bool] = []
+        self.segment_activity: list[bool] = []
         self.pending: list[tuple[np.ndarray, float, bool, bool]] = []
+        self.context_buffer: list[tuple[np.ndarray, float, bool, bool]] = []
         self.pending_start_time = 0.0
         self.last_timestamp: float | None = None
         self.in_segment = False
@@ -250,6 +313,8 @@ class SegmentTracker:
         now: float,
         left_hand_present: bool | None = None,
         right_hand_present: bool | None = None,
+        *,
+        gesture_active: bool | None = None,
     ) -> Segment | None:
         if not math.isfinite(now):
             raise ValueError(f"frame timestamp must be finite, got {now}")
@@ -286,7 +351,10 @@ class SegmentTracker:
         if values.size >= FEATURE_DIM:
             values[LEFT_PRESENCE_INDEX] = float(left)
             values[RIGHT_PRESENCE_INDEX] = float(right)
-        active = left or right
+        detected = left or right
+        active = detected if gesture_active is None else bool(gesture_active)
+        if active and not detected:
+            raise ValueError("gesture activity requires at least one observed hand")
 
         if active:
             self.last_hand_time = now
@@ -302,8 +370,7 @@ class SegmentTracker:
                         return None
                     pending = self.pending
                     self.pending = []
-                    self.in_segment = True
-                    self.start_time = pending[0][1]
+                    self._begin_segment(pending[0][1])
                     for pending_values, pending_time, pending_left, pending_right in pending:
                         completed = self._append(
                             pending_values,
@@ -311,17 +378,13 @@ class SegmentTracker:
                             hands_up=True,
                             left_hand_present=pending_left,
                             right_hand_present=pending_right,
+                            gesture_active=True,
                         )
                         if completed is not None:
                             return completed
                     promoted = True
                 else:
-                    self.segment = []
-                    self.segment_times = []
-                    self.segment_left = []
-                    self.segment_right = []
-                    self.in_segment = True
-                    self.start_time = now
+                    self._begin_segment(now)
             if self.awaiting_hand_drop:
                 return None
             if promoted:
@@ -332,18 +395,22 @@ class SegmentTracker:
                 hands_up=True,
                 left_hand_present=left,
                 right_hand_present=right,
+                gesture_active=True,
             )
 
         if self.pending:
             # Pending evidence was a blip; discard it without ever exposing a segment.
             self.pending = []
+            self._remember_context(values, now, left, right)
             return None
         if self.awaiting_hand_drop:
             if now - self.last_hand_time >= self.word_gap:
                 self.awaiting_hand_drop = False
+                self._remember_context(values, now, left, right)
             return None
 
         if not self.in_segment:
+            self._remember_context(values, now, left, right)
             return None
         if now - self.last_hand_time < self.word_gap:
             # Keep boundary timing for the tracker, but classify_segment() removes these frames
@@ -352,8 +419,9 @@ class SegmentTracker:
                 values,
                 now,
                 hands_up=False,
-                left_hand_present=False,
-                right_hand_present=False,
+                left_hand_present=left,
+                right_hand_present=right,
+                gesture_active=False,
             )
         return self._close(now, forced=False)
 
@@ -373,10 +441,37 @@ class SegmentTracker:
         self.segment_times = []
         self.segment_left = []
         self.segment_right = []
+        self.segment_activity = []
         self.pending = []
+        self.context_buffer = []
         self.in_segment = False
         self.awaiting_hand_drop = False
         self.last_timestamp = None
+
+    def _remember_context(
+        self,
+        features: np.ndarray,
+        now: float,
+        left_hand_present: bool,
+        right_hand_present: bool,
+    ) -> None:
+        if not (left_hand_present or right_hand_present):
+            self.context_buffer = []
+            return
+        self.context_buffer.append((features.copy(), now, left_hand_present, right_hand_present))
+        cutoff = now - GESTURE_PRE_ROLL_SECONDS
+        self.context_buffer = [item for item in self.context_buffer if item[1] >= cutoff]
+
+    def _begin_segment(self, active_start_time: float) -> None:
+        context = self.context_buffer
+        self.context_buffer = []
+        self.segment = [item[0] for item in context]
+        self.segment_times = [item[1] for item in context]
+        self.segment_left = [item[2] for item in context]
+        self.segment_right = [item[3] for item in context]
+        self.segment_activity = [False] * len(context)
+        self.in_segment = True
+        self.start_time = active_start_time
 
     def _append(
         self,
@@ -386,11 +481,13 @@ class SegmentTracker:
         hands_up: bool,
         left_hand_present: bool,
         right_hand_present: bool,
+        gesture_active: bool,
     ) -> Segment | None:
         self.segment.append(features)
         self.segment_times.append(now)
         self.segment_left.append(left_hand_present)
         self.segment_right.append(right_hand_present)
+        self.segment_activity.append(gesture_active)
         if now - self.start_time >= self.max_seconds:
             # Once a segment is closed by the hard duration cap, the next active frame may still
             # belong to the same gesture even if the cap was crossed during a no-hand tail. Wait
@@ -404,6 +501,7 @@ class SegmentTracker:
         times, self.segment_times = self.segment_times, []
         left, self.segment_left = self.segment_left, []
         right, self.segment_right = self.segment_right, []
+        activity, self.segment_activity = self.segment_activity, []
         return Segment(
             features=done,
             start_time=self.start_time,
@@ -413,6 +511,7 @@ class SegmentTracker:
             timestamps=times,
             left_hand_present=left,
             right_hand_present=right,
+            gesture_active=activity,
         )
 
 
@@ -442,7 +541,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow manual --confidence threshold before negative calibration (never claim OOD safety)",
     )
-    parser.add_argument("--word-gap", type=float, default=0.45, help="No-hand gap that ends one gesture")
+    parser.add_argument(
+        "--word-gap",
+        type=float,
+        default=0.45,
+        help="Inactive/resting-hand gap that ends one gesture",
+    )
     parser.add_argument("--sentence-gap", type=float, default=2.2, help="Additional idle time before speaking")
     parser.add_argument(
         "--min-seconds",
@@ -540,16 +644,20 @@ def main() -> None:
                     break
                 now = time.monotonic()
                 obs = extractor.process_frame(frame)
+                gesture_active = gesture_activity_from_features(
+                    obs.features, obs.left_hand_present, obs.right_hand_present
+                )
                 done = tracker.feed(
                     obs.hands_present,
                     obs.features,
                     now,
                     obs.left_hand_present,
                     obs.right_hand_present,
+                    gesture_active=gesture_active,
                 )
                 if done is not None and done.forced:
                     print(
-                        f"Segment hit --max-seconds ({args.max_seconds}); classifying and waiting for hand drop."
+                        f"Segment hit --max-seconds ({args.max_seconds}); classifying and waiting for resting hands."
                     )
                 handle_segment(done)
 

@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from scripts.audit_run_artifacts import audit_run, get_sha256
+from scripts.finalize_run_artifacts import build_run_manifest
 
 
 @pytest.fixture
@@ -275,3 +276,34 @@ def test_generic_audit_refuses_wrong_fold_count(mock_run_dir: Path):
         expected_clips=576,
     )
     assert ok is False
+
+
+def test_build_run_manifest_parameterized(tmp_path: Path):
+    run_dir = tmp_path / "mock_run"
+    run_dir.mkdir()
+    manifest = build_run_manifest(
+        run_dir=run_dir,
+        base_commit="abc1234",
+        branch_name="test-branch",
+        worktree_status="",
+        python_version="3.11.9",
+        gpu_info_text="Driver Version: 560.94 CUDA Version: 12.6 | 0 NVIDIA GeForce RTX 4050",
+        metrics_data={"runtime": {}, "model": {}},
+        sig_loso="sig123",
+        checkpoint_sha="ckpt123",
+        labels_file=tmp_path / "custom_labels.txt",
+        plan_file=tmp_path / "custom_plan.json",
+        manifest_csv=tmp_path / "custom_manifest.csv",
+        fold_stats={},
+        all_preds=[],
+        artifacts_info=[],
+        data_dir="dataset/custom_data",
+        cache_dir="dataset/processed/custom_cache",
+    )
+    assert manifest["data_dir"] == "dataset/custom_data"
+    assert "dataset/custom_data" in manifest["command_loso"]
+    assert "dataset/custom_data" in manifest["command_ship"]
+    assert "custom_plan.json" in manifest["command_loso"]
+    assert "custom_cache" in manifest["command_loso"]
+    assert "recordings_v1_p123" not in manifest["command_loso"]
+    assert "recordings_v1_p123" not in manifest["command_ship"]

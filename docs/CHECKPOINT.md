@@ -12,6 +12,9 @@ _Cập nhật: 2026-08-28_
 - **LOSO diagnostics**: report có một prediction row cho mỗi test clip; console in fold tệ, nhãn tệ/confusion và clip sai có hand ratio thấp.
 - **Artifact pairing**: `training_signature` nằm trong report, metrics và chính checkpoint; bao phủ data/nhãn, hyperparameter, model/augment/training recipe, device/runtime. `metrics.json.checkpoint_sha256` buộc metadata vào đúng file weights; ship chỉ in `PAIR OK` khi cả ba signature khớp.
 - **Realtime**: `SegmentTracker` dùng min-active hysteresis theo giây, chặn một cử chỉ chậm thành hai từ; no-hand tail bị loại trước model; shared preprocessing với offline; reject policy thiếu calibration thì fail-closed và không TTS.
+- **Realtime activity gate**: hand presence không còn tự mở segment; cổ tay phải cao hơn đường hông
+  0,5 shoulder-width, có fallback khi thiếu pose. Giữ transition context 1,0s trước/0,5s sau nhưng
+  chỉ activity mới tính duration/cap. Offline smoke: P01 25/25 và QIPEDC 3/3, chưa test camera thật.
 - **Calibration/OOD**: policy chỉ được fit từ split calibration riêng, có receipt identity/content/checkpoint/signature và category `idle_stationary` + `oov_motion`; chưa có motion gate hay metric OOD thật nếu thiếu dữ liệu.
 - **On-site QA**: `vslr-check` bắt buộc có manifest, dùng chung cache, phân biệt lỗi quay với `LOI HE THONG`, không train hay ghi `models/`.
 - **Fail-closed extraction**: train chỉ được bỏ qua `ClipExtractionError`/file biến mất; permission, MediaPipe runtime và lỗi hệ thống khác abort ngay thay vì bị tính vào quota 5% clip xấu.
@@ -27,10 +30,17 @@ _Cập nhật: 2026-08-28_
 
 ## In progress / working tree
 
+- **2026-09-04 — Triển khai External Stress Test V2 (`dataset/external_test_v2`)**:
+  - Khảo sát và bóc tách dữ liệu từ các nguồn mở: QIPEDC (`E001`), Hải Ly VSL (`E002`), UNDP Hà Nội (`E003`).
+  - Đã cắt và chuẩn hóa 12 clip bao phủ **10 / 25 cử chỉ** vào `dataset/external_test_v2/clips/`.
+  - Đối soát giải phẫu / hình thái cử chỉ: `Mấy tuổi` và `Chuyện gì` của `E002` khớp 100% với cử chỉ chuẩn P01; chỉ ra rõ các biến thể ngôn ngữ ký hiệu ở `Xin chào`, `Tôi khỏe`, `Xin lỗi` của `E003`.
+  - Đã chạy smoke test offline qua `vslr-sentence` với model `runs/p123-clean-20260903-092539/gesture_lstm.pt` (SHA-256 `277A8DEF...`): E001 pass 3/3 (100%), E002 và E003 được reject policy từ chối an toàn (confidence 16%–48% < 72%), không sinh phụ đề sai.
+  - 15 nhãn còn lại (các câu giao tiếp tình huống) được ghi nhận trong `missing_labels.csv` và cần quay bổ sung từ người ký độc lập theo chuẩn P01-P03.
+
 - **2026-08-28 — pipeline hardening đang triển khai** theo
   `docs/specs/pipeline-hardening.md`: recording plan/count/hash gate, presence-aware
   missing-hand preprocessing, shared offline/realtime segmentation, reject evaluation và
-  `vslr-sentence`. Chưa train model thật; chưa có đủ raw video để đo accuracy.
+  `vslr-sentence`.
 
 - Nhánh `pipeline-signer-split` có **7 commit** sau `main`, HEAD `c8ee92a`; chưa merge.
 - Các sửa blocker từ reviewer cuối đang **uncommitted** trong source/tests/docs: three-way artifact binding, manifest fail-closed, typed extraction failures, exact NFC directory gate và finite realtime durations.

@@ -14,8 +14,11 @@ from pathlib import Path
 
 import numpy as np
 
+from prototype_3_gestures.vsl3.console import configure_utf8_stdio
 from prototype_3_gestures.vsl3.features import FEATURE_DIM, HolisticExtractor, SEQUENCE_LENGTH
 from prototype_3_gestures.vsl3.labels import read_expected_labels
+
+configure_utf8_stdio()
 
 
 @dataclass(frozen=True)
@@ -146,7 +149,7 @@ def main() -> None:
             if ldir.is_dir():
                 for f in sorted(ldir.iterdir()):
                     if f.is_file() and f.suffix.lower() in {".mov", ".mp4"} and not f.name.endswith(".bak"):
-                        clips.append(SimpleClip(label=lbl, person=p, path=f))
+                        clips.append(SimpleClip(label=lbl, person=p, path=f.resolve()))
 
     print(f"Total clips to check/extract: {len(clips)} across {len(allowed_people)} people")
 

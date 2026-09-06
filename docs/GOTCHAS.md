@@ -107,6 +107,16 @@ Bẫy đã gặp. Tích lũy, không xóa. Gặp bẫy mới → append.
 - **Cause**: `Segment.end_time` là lúc gap đủ dài để đóng biên, không phải frame cuối còn thấy tay. Lấy `end_time - start_time` cộng toàn bộ idle tail vào độ dài cử chỉ, nên khi `word_gap > min_seconds` bộ lọc tối thiểu vô hiệu theo cấu trúc.
 - **Avoidance/fix**: `Segment` giữ riêng `active_end_time=last_hand_time`; `duration` chỉ là active span, còn `end_time` vẫn giữ thời điểm đóng biên. Test một-frame khóa `duration == 0`.
 
+## MediaPipe thấy bàn tay không có nghĩa người đang múa
+
+- **Symptom**: người đứng hạ tay nhưng webcam vẫn ở `GESTURE`, chạm `--max-seconds (5.0)` và phân
+  loại một đoạn chứa nhiều giây tư thế nghỉ.
+- **Cause**: state machine cũ dùng `left_hand_present or right_hand_present` làm activity. Với khung
+  toàn thân, MediaPipe vẫn detect được bàn tay đang nghỉ cạnh hông.
+- **Avoidance/fix**: activity gate so cổ tay với đường hông trong tọa độ chuẩn hóa; presence chỉ mô tả
+  observation. Giữ transition context hữu hạn 1,0 giây trước và 0,5 giây sau để không cắt mất động
+  tác đưa/hạ tay mà model đã học. Fallback presence nếu pose/hông không đủ.
+
 ## Nhãn vắng ở tất cả người ký là vô hình nếu chỉ nhìn cây
 
 - **Symptom**: hai người cùng có `Cảm ơn` nhưng cùng quên `Xin chào`; `validate_clips(..., loso=True)` vẫn pass vì bài toán một lớp tự nhất quán.
