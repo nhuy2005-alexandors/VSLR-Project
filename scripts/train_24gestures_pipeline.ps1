@@ -19,6 +19,14 @@ python --version | Set-Content "$RunDir\python-version.txt"
 nvidia-smi | Set-Content "$RunDir\gpu-info.txt"
 Copy-Item "dataset_files_sha256.csv" "$RunDir\dataset_files_sha256.csv" -Force
 
+@"
+LOSO Command:
+vslr-train --data-dir dataset/recordings_v2_4x24 --recording-plan dataset/recording_plan_v2_4x24.json --labels-file dataset/labels_v2_24.txt --cache-dir dataset/processed/landmark_cache_v2_4x24 --loso --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 --model-dir $RunDir
+
+Ship Command:
+vslr-train --data-dir dataset/recordings_v2_4x24 --recording-plan dataset/recording_plan_v2_4x24.json --labels-file dataset/labels_v2_24.txt --cache-dir dataset/processed/landmark_cache_v2_4x24 --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 --model-dir $RunDir
+"@ | Set-Content "$RunDir\commands.txt" -Encoding utf8
+
 Write-Host "Running pytest before training..."
 python -m pytest -q | Tee-Object "$RunDir\test.log"
 if ($LASTEXITCODE -ne 0) {
