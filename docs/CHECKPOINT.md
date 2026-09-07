@@ -4,6 +4,24 @@ _Cập nhật: 2026-09-07_
 
 ## Done
 
+- **Hoàn thành Xây dựng Công cụ Đánh giá Ngoài Độc lập (`vslr-eval`)**:
+  - Module: `src/prototype_3_gestures/evaluate.py`.
+  - CLI: `vslr-eval` (đã đăng ký trong `pyproject.toml`).
+  - Spec: `docs/specs/external-evaluation.md`.
+  - Cổng chống rò rỉ dữ liệu (Leakage Gate): đối chiếu SHA-256 từng clip test với manifest train (`--training-manifest`), lập tức dừng (fail-closed) nếu trùng lặp byte.
+  - Phân tách chỉ số: Top-1 Raw Accuracy, Accepted Accuracy, Coverage và Rejection Rate dựa trên ngưỡng `--confidence`.
+  - Hỗ trợ cả chế độ thư mục (`--data-dir`) và clip đơn lẻ (`--video "Nhãn=path"`).
+  - Tự động sinh báo cáo: `predictions.csv`, `metrics.json`, `REPORT.md`, `confusion_matrix.png` trong `--output-dir`.
+  - Test suite: `tests/test_eval.py` (11 unit tests mới).
+  - Toàn bộ test suite: `python -m pytest -q` đạt **138 passed, 45 subtests passed**.
+  - Bất biến mô hình: Checkpoint `models/gesture_lstm.pt` giữ nguyên mã băm SHA-256 `5e202eb9108c06e446da5ae1d27aaebcec7e14cb2e72a9c233c4ac99da245b83`.
+
+- **Phát hành Candidate Model 24 cử chỉ lên GitHub (`pipeline-signer-split`)**:
+  - Commit SHA: `05e6cb9049915a809db4d313f0ceb0d7b68f6cbe`.
+  - Checkpoint ship mặc định: `models/gesture_lstm.pt` (24 nhãn, SHA-256 `5e202eb9108c...`).
+  - Tài liệu bổ sung: `models/MODEL_CARD.md` và cập nhật `README.md`.
+  - Khóa ba chiều: `training_signature = 43316055f78bbf2e83c806396d5791d06faeb57b62bef13be17d77095a9c8675`.
+
 - **Hoàn thành Huấn luyện & Đánh giá Model 24 cử chỉ 4 người ký (P01, P02, P03, P04)**:
   - Thư mục run: `runs/v2-4signers-24-20260907-005546/`.
   - Manifest chuẩn: `dataset/labels_v2_24.txt` (loại bỏ duy nhất nhãn `Hẹn gặp lại` để triệt tiêu data leakage do file hash trùng giữa P02 và P04; giữ nguyên thứ tự 24 nhãn chuẩn NFC).

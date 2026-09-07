@@ -124,3 +124,16 @@ Quyết định kiến trúc + LÝ DO. Tích lũy, không xóa.
 - **Decision**: Loại bỏ hoàn toàn nhãn `Hẹn gặp lại` khỏi tập nhãn; bảo lưu nguyên vẹn thứ tự và mã hóa NFC của 24 nhãn còn lại (`dataset/labels_v2_24.txt`). Thiết lập cây dữ liệu dẫn xuất `dataset/recordings_v2_4x24/` (576 clip độc nhất, 576 SHA-256 khác nhau) và recording plan `dataset/recording_plan_v2_4x24.json`. Khởi tạo landmark cache riêng `dataset/processed/landmark_cache_v2_4x24/`. Các script audit và finalize được tham số hóa linh hoạt theo `expected_clips=576, labels=24, folds=4`.
 - **Trade-offs**: Tập từ vựng giảm từ 25 xuống 24 cử chỉ. Đổi lại, dữ liệu 4 người ký hoàn toàn sạch, triệt tiêu leakage, cho phép đo đạc LOSO 4-fold khách quan đạt độ chính xác 90.97% mà không bị ô nhiễm chéo. Model cũ trong `models/` được giữ nguyên cho đến khi Root duyệt.
 
+## ADR-016: Công cụ đánh giá độc lập vslr-eval với cổng chống rò rỉ dữ liệu (Zero Leakage Gate)
+
+- **Date**: 2026-09-07
+- **Context**: Đánh giá trên người mới độc lập (ví dụ P05) hoặc các clip thu thập thực tế cần đảm bảo tính khách quan tuyệt đối: không được phép huấn luyện lại, không làm thay đổi trọng số checkpoint, và phải bảo đảm 100% không có clip kiểm thử nào trùng hash byte với bất kỳ clip huấn luyện nào.
+- **Decision**: Xây dựng công cụ CLI `vslr-eval` (`prototype_3_gestures.evaluate`):
+  1. Chỉ suy diễn (`torch.no_grad()`, `model.eval()`), kiểm tra SHA-256 của checkpoint trước và sau khi đánh giá để bảo đảm tính bất biến (invariant).
+  2. Bổ sung cổng chống rò rỉ dữ liệu (Leakage Gate): đối chiếu mã băm SHA-256 của từng clip kiểm thử với file manifest huấn luyện (`--training-manifest`). Phát hiện trùng lặp là dừng ngay lập tức (fail-closed).
+  3. Phân tách rõ ràng các chỉ số: Top-1 raw accuracy, accepted accuracy, coverage và rejection rate dựa trên ngưỡng `--confidence` (mặc định 0.50 chỉ dùng cho chẩn đoán/demo, không phải ngưỡng production).
+  4. Hỗ trợ cả chế độ thư mục (`--data-dir`) và kiểm tra một clip nhanh (`--video "Nhãn=path"`).
+  5. Toàn bộ kết quả xuất vào `--output-dir` gồm `predictions.csv`, `metrics.json`, `REPORT.md`, `confusion_matrix.png`; không ghi đè vào `models/`.
+- **Trade-offs**: Clip kiểm thử phải qua trích xuất MediaPipe và hash SHA-256 từng file trước khi suy diễn. Đổi lại, kết quả đánh giá hoàn toàn minh bạch, khách quan, không thể bị nghi ngờ rò rỉ dữ liệu hay thay đổi trọng số mô hình.
+
+
