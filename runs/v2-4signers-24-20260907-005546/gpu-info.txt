@@ -1,0 +1,47 @@
+Mon Sep  7 00:55:49 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 591.66                 Driver Version: 591.66         CUDA Version: 13.1     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4050 ...  WDDM  |   00000000:01:00.0  On |                  N/A |
+| N/A   51C    P8              3W /   65W |    1583MiB /   6141MiB |     30%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            1284    C+G   ...App_cw5n1h2txyewy\LockApp.exe      N/A      |
+|    0   N/A  N/A            3592    C+G   ..._pzs8sxrjxfjjc\app\claude.exe      N/A      |
+|    0   N/A  N/A            7924    C+G   ....0.4191.53\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           11188    C+G   ...em32\ApplicationFrameHost.exe      N/A      |
+|    0   N/A  N/A           11440    C+G   ...avity IDE\Antigravity IDE.exe      N/A      |
+|    0   N/A  N/A           11572    C+G   C:\Windows\explorer.exe               N/A      |
+|    0   N/A  N/A           12072    C+G   ...2txyewy\CrossDeviceResume.exe      N/A      |
+|    0   N/A  N/A           12844    C+G   ...pt-launcher\Codex Web GPT.exe      N/A      |
+|    0   N/A  N/A           13948    C+G   ..._cw5n1h2txyewy\SearchHost.exe      N/A      |
+|    0   N/A  N/A           13972    C+G   ...y\StartMenuExperienceHost.exe      N/A      |
+|    0   N/A  N/A           14652    C+G   ...Telegram Desktop\Telegram.exe      N/A      |
+|    0   N/A  N/A           14960    C+G   ...ows\System32\NahimicSvc64.exe      N/A      |
+|    0   N/A  N/A           15136    C+G   ...ntrolPanel\SystemSettings.exe      N/A      |
+|    0   N/A  N/A           15952    C+G   ...xyewy\ShellExperienceHost.exe      N/A      |
+|    0   N/A  N/A           17644    C+G   ...5n1h2txyewy\TextInputHost.exe      N/A      |
+|    0   N/A  N/A           18392    C+G   ...8bbwe\PhoneExperienceHost.exe      N/A      |
+|    0   N/A  N/A           19468    C+G   ...lare WARP\Cloudflare WARP.exe      N/A      |
+|    0   N/A  N/A           21260    C+G   ...avity IDE\Antigravity IDE.exe      N/A      |
+|    0   N/A  N/A           21868    C+G   ...ms\Zalo\Zalo-26.8.20\Zalo.exe      N/A      |
+|    0   N/A  N/A           22540    C+G   ...4__w2gh52qy24etm\Nahimic3.exe      N/A      |
+|    0   N/A  N/A           23876    C+G   ...\Proton\Drive\ProtonDrive.exe      N/A      |
+|    0   N/A  N/A           27180    C+G   ....0.4191.62\msedgewebview2.exe      N/A      |
+|    0   N/A  N/A           28516    C+G   ...\plugins\capture\ZaloCall.exe      N/A      |
+|    0   N/A  N/A           30576    C+G   ...2p2nqsd0c76g0\app\ChatGPT.exe      N/A      |
+|    0   N/A  N/A           33324    C+G   ...t\Edge\Application\msedge.exe      N/A      |
+|    0   N/A  N/A           34276    C+G   ...SnippingTool\SnippingTool.exe      N/A      |
+|    0   N/A  N/A           40776    C+G   ...yb3d8bbwe\WindowsTerminal.exe      N/A      |
+|    0   N/A  N/A           46236    C+G   ...indows\System32\ShellHost.exe      N/A      |
++-----------------------------------------------------------------------------------------+

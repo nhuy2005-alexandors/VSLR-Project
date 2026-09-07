@@ -20,29 +20,43 @@ models/                    Checkpoint và metadata
 python -m pip install -e ".[tts]"
 ```
 
-## Camera test
+## Demo Camera với Model 24 Cử chỉ
 
-Checkpoint đang track được train bằng landmark cũ, còn extractor hiện tại là feature v3 (landmark + presence L/R). Lệnh mặc định
-**từ chối** chạy artifact không tương thích cho tới khi train lại:
+Mô hình mặc định tại `models/gesture_lstm.pt` hiện đã được cập nhật bản candidate 24 cử chỉ (MediaPipe Holistic feature v3 + BiLSTM), huấn luyện trên 576 clip của 4 người ký (P01–P04).
+
+### Cài đặt dependencies
 
 ```powershell
-vslr-camera --no-tts
+python -m pip install -e ".[tts]"
 ```
 
-Không có cờ bypass cho checkpoint lệch dimension/feature contract. Sau khi train checkpoint v3
-và có reject policy calibration, chạy bình thường. Trước khi có negative/idle/OOV calibration,
-realtime fail-closed và không phát âm segment bị reject; chỉ dùng `--allow-uncalibrated` cho demo
-tạm thời.
+### Chạy camera thử nghiệm
 
-Mỗi lần múa xong một cử chỉ, hạ tay khoảng 0,45 giây. Sau cử chỉ cuối, giữ nghỉ khoảng 2,2 giây để hệ thống đọc cả câu. Phím `SPACE` chốt segment, `S` đọc ngay, `C` xóa câu, `Q` thoát.
+Do reject policy chưa có dữ liệu calibration riêng biệt để lọc cử chỉ nghỉ/OOV, chạy demo tạm thời cần thêm cờ `--allow-uncalibrated`:
 
-## Kết quả hiện tại
+```powershell
+vslr-camera --model models/gesture_lstm.pt --allow-uncalibrated --confidence 0.50 --no-tts
+```
 
-**Chưa có con số accuracy nào báo cáo được.**
+*Lưu ý quan trọng*: Ngưỡng `--confidence 0.50` chỉ dùng cho mục đích chẩn đoán/demo tạm thời, **không phải ngưỡng production** (ngưỡng an toàn khuyến nghị khi có calibration policy là $\ge 0.72$).
 
-- 27 clip nguồn, 9 clip mỗi cử chỉ. Tên file **không** mã hóa người ký, và không ai xác nhận được clip nào của người nào — nên không chạy được leave-one-signer-out trên bộ này.
-- Checkpoint trong `models/` được train bằng **pipeline cũ**, đúng 1 epoch, pooling cũ và feature v1. Loader hiện chặn nó vì extractor sinh feature v3. **Không** dùng artifact này để báo bất kỳ số nào.
-- Muốn có con số: quay dataset có ID người theo `docs/specs/dataset-recording.md`, rồi chạy `--loso`.
+Mỗi lần thực hiện xong một cử chỉ, hạ tay khoảng 0,45 giây. Sau cử chỉ cuối, giữ nghỉ khoảng 2,2 giây để hệ thống chốt câu. Phím `SPACE` chốt segment, `S` đọc ngay, `C` xóa câu, `Q` thoát.
+
+## Đánh giá Kỹ thuật (Candidate 24 Cử chỉ 4 Người ký)
+
+- **Kiến trúc**: MediaPipe Holistic v3 (`203` dims, `60` frames) + BiLSTM (`hidden_size=96`, bidirectional).
+- **Quy trình đánh giá**: Leave-One-Signer-Out (LOSO) 4-fold chéo độc lập trên 4 người ký (P01, P02, P03, P04) × 24 cử chỉ × 6 clips = 576 clips (không data leakage, không augmentation trên tập test).
+- **Kết quả LOSO**:
+  - **Pooled Accuracy: 90.97% (524 / 576 clips đúng)**.
+  - **Macro Mean Accuracy: 90.97%**.
+  - Fold P01: 97.22% (140 / 144), Loss: 0.1274.
+  - Fold P02: 93.06% (134 / 144), Loss: 0.3197.
+  - Fold P03: 95.83% (138 / 144), Loss: 0.2642.
+  - Fold P04: 77.78% (112 / 144), Loss: 0.9171 (fold thấp nhất do lệch hình thái cử chỉ).
+- **Kỷ luật số liệu**:
+  - 90.97% là kết quả kiểm thử chéo LOSO của quy trình huấn luyện, không phải test accuracy nội tại của file weights ship `models/gesture_lstm.pt`. Checkpoint ship được fit trên toàn bộ 576 clips để demo; **tuyệt đối không nạp lại 576 clips này để báo cáo test accuracy**.
+  - Chi tiết mô hình xem tại `models/MODEL_CARD.md`.
+  - Toàn bộ artifacts và chứng chỉ máy (Machine Audit exit code 0) được lưu tại `runs/v2-4signers-24-20260907-005546/`.
 
 ## Train
 
