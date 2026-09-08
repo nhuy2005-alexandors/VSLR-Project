@@ -4,16 +4,21 @@ _Cập nhật: 2026-09-07_
 
 ## Done
 
-- **Hoàn thành Xây dựng Công cụ Đánh giá Ngoài Độc lập (`vslr-eval`)**:
+- **Hoàn thành Xây dựng & Siết chặt Công cụ Đánh giá Ngoài Độc lập (`vslr-eval`)**:
   - Module: `src/prototype_3_gestures/evaluate.py`.
   - CLI: `vslr-eval` (đã đăng ký trong `pyproject.toml`).
-  - Spec: `docs/specs/external-evaluation.md`.
-  - Cổng chống rò rỉ dữ liệu (Leakage Gate): đối chiếu SHA-256 từng clip test với manifest train (`--training-manifest`), lập tức dừng (fail-closed) nếu trùng lặp byte.
-  - Phân tách chỉ số: Top-1 Raw Accuracy, Accepted Accuracy, Coverage và Rejection Rate dựa trên ngưỡng `--confidence`.
+  - Spec: `docs/specs/external-evaluation.md` (phiên bản 2.0, Hoàn thành & Kiểm định).
+  - Cổng Run Manifest khóa 3 chiều (Run Manifest Gate): bắt buộc có `--run-manifest` (`RUN_MANIFEST.json`). Kiểm tra trước khi nạp MediaPipe / suy diễn: SHA-256 của `--training-manifest` == `dataset_manifest_sha256`, SHA-256 model == `checkpoint_sha256`, `training_signature` trong checkpoint == `RUN_MANIFEST.json.training_signature`. Lệch bất kỳ trường nào: lập tức dừng (fail-closed), in `error: ...`, exit 2, không trích xuất đặc trưng, không suy diễn, không ghi artifact.
+  - Cổng chống rò rỉ dữ liệu (Leakage Gate): bắt buộc có `--training-manifest` có mã băm SHA-256 64-hex hợp lệ, đối chiếu SHA-256 từng clip test với manifest train, lập tức dừng (fail-closed) nếu trùng lặp byte. Chỉ khẳng định Zero Leakage sau khi clip vượt qua cổng này.
+  - Cổng an toàn đầu ra (Output Safety): chặn tuyệt đối `--output-dir` trùng hoặc nằm trong `models/`, checkpoint parent hoặc data dir; chặn ghi đè artifacts cũ nếu thiếu `--overwrite`.
+  - Cổng toàn vẹn thư mục (Directory Completeness): bắt buộc ít nhất một `--expected-signer`, `--clips-per-label` phải là số nguyên dương $\ge 1$; kiểm tra đủ 24 nhãn Unicode NFC, chặn 2 clip test trùng byte.
+  - Phân tách chỉ số: Top-1 Raw Accuracy, Accepted Accuracy, Coverage và Rejection Rate dựa trên ngưỡng `--confidence` (ngưỡng 0.50 chỉ là chẩn đoán/demo tạm thời, không phải production).
+  - Xử lý lỗi CLI: In ngắn gọn `error: ...` ra `stderr`, exit 2, không traceback; không nuốt lỗi lập trình bất ngờ (`TypeError`, `AttributeError`,...).
+  - Hiện tại người ký P05 chưa có video thực tế trên đĩa nên chưa có số liệu accuracy kiểm thử thực tế.
   - Hỗ trợ cả chế độ thư mục (`--data-dir`) và clip đơn lẻ (`--video "Nhãn=path"`).
-  - Tự động sinh báo cáo: `predictions.csv`, `metrics.json`, `REPORT.md`, `confusion_matrix.png` trong `--output-dir`.
-  - Test suite: `tests/test_eval.py` (11 unit tests mới).
-  - Toàn bộ test suite: `python -m pytest -q` đạt **138 passed, 45 subtests passed**.
+  - Tự động sinh báo cáo đầy đủ provenance: `predictions.csv`, `metrics.json`, `REPORT.md`, `confusion_matrix.png` trong `--output-dir`.
+  - Test suite: `tests/test_eval.py` (**31 unit tests** kiểm thử nghiêm ngặt).
+  - Toàn bộ test suite: `python -m pytest -q` đạt **158 passed, 45 subtests passed**.
   - Bất biến mô hình: Checkpoint `models/gesture_lstm.pt` giữ nguyên mã băm SHA-256 `5e202eb9108c06e446da5ae1d27aaebcec7e14cb2e72a9c233c4ac99da245b83`.
 
 - **Phát hành Candidate Model 24 cử chỉ lên GitHub (`pipeline-signer-split`)**:
@@ -57,7 +62,7 @@ _Cập nhật: 2026-09-07_
 - **Khởi tạo dataset V1**: `vslr-init-dataset` đọc recording plan + manifest, tạo an toàn cây
   `<người>/<nhãn>/`, hỗ trợ dry-run và không tạo/di chuyển/ghi đè video. Manifest đã chốt 30
   nhãn; kế hoạch hiện tại là 4 người × 30 nhãn × 6 clip = 720 clip.
-- **Verify hiện tại**: `python -m pytest -q` → **93 passed, 31 subtests passed**; py_compile package, editable install và CLI help/dry-run smoke pass. Chưa có raw video V1 và checkpoint feature v3 để đo LOSO/câu/người mới.
+- **Verify hiện tại**: `python -m pytest -q` → **158 passed, 45 subtests passed**; py_compile package, editable install và CLI help/dry-run smoke pass. Chưa có raw video V1 và checkpoint feature v3 để đo LOSO/câu/người mới.
 
 - **LOSO chỉ ra nhãn nào sai**: `evaluate()` (`prepare_train.py:317`) trả một dòng mỗi clip; `folds[].predictions` mang `{video, person, label, predicted, confidence, correct}`; console in 5 nhãn tệ nhất kèm cặp confusion và clip vừa-sai-vừa-quay-tệ. `confidence` là softmax-max nên cùng thang với `--confidence` của demo. `build_eval_loader()` (`:305`) dùng chung cho train và report, không augment không shuffle — đó là điều kiện để dòng i ứng clip i.
 - **Khóa dẫn xuất KHÔNG lưu vào report**: `per_label_accuracy` / `worst_labels` / `suspect_clips` là hàm thuần của `predictions[]` + `extraction[]`, chỉ in console. Lưu bản sao là tạo chỗ để trôi khỏi nguồn.

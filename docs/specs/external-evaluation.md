@@ -1,18 +1,19 @@
 # Spec — Đánh giá Tập Kiểm thử Bên ngoài (External Evaluation)
 
-_Phiên bản: 1.0. Ngày: 2026-09-07. Trạng thái: Bản thảo kỹ thuật (Draft / Ready for TDD)._
+_Phiên bản: 2.0. Ngày: 2026-09-08. Trạng thái: Hoàn thành và Kiểm định (Implemented & Verified)._
 
 ## 1. Mục tiêu (Goals)
 
 Xây dựng công cụ đánh giá độc lập (`vslr-eval`) để đo lường hiệu năng của mô hình nhận diện cử chỉ trên tập dữ liệu kiểm thử hoàn toàn mới (ví dụ: người ký độc lập P05, video ghi hình thực tế hoặc trích xuất từ camera), tuân thủ các nguyên tắc cốt lõi:
-1. **Chỉ suy diễn (Inference Only)**: Tuyệt đối không huấn luyện lại, không cập nhật trọng số (`requires_grad = False`), không thay đổi mô hình checkpoint.
-2. **Triệt tiêu Rò rỉ Dữ liệu (Zero Data Leakage)**: Kiểm tra mã băm SHA-256 của từng video kiểm thử đối chiếu với manifest huấn luyện (`--training-manifest`). Nếu phát hiện trùng lặp byte với bất kỳ clip huấn luyện nào, hệ thống lập tức dừng (fail-closed) và báo lỗi.
+1. **Chỉ suy diễn (Inference Only)**: Tuyệt đối không huấn luyện lại, không cập nhật trọng số (`requires_grad = False`), sử dụng `torch.inference_mode()`, không thay đổi mô hình checkpoint.
+2. **Triệt tiêu Rò rỉ Dữ liệu (Zero Data Leakage)**: Kiểm tra mã băm SHA-256 của từng video kiểm thử đối chiếu với manifest huấn luyện (`--training-manifest`). Chỉ được khẳng định Zero Leakage khi toàn bộ clip kiểm thử đã vượt qua cổng đối chiếu này. Nếu phát hiện trùng lặp byte với bất kỳ clip huấn luyện nào, hệ thống lập tức dừng (fail-closed) và báo lỗi.
 3. **Đồng nhất đường ống đặc trưng**: Dùng chung pipeline trích xuất (`HolisticExtractor`), chuẩn hóa toạ độ, xử lý presence và nội suy thời gian (`resample_sequence`) đồng nhất 100% với môi trường camera realtime và offline.
 4. **Kỷ luật số liệu**:
    - Tách biệt rõ ràng giữa độ chính xác thô (top-1 raw accuracy) và độ chính xác sau bộ lọc tin cậy (accepted accuracy).
    - Đo lường tỉ lệ từ chối (rejection rate) và độ phủ (coverage).
-   - Không coi ngưỡng thử nghiệm `confidence 0.50` là ngưỡng production.
+   - Ngưỡng thử nghiệm `confidence 0.50` chỉ là ngưỡng chẩn đoán tạm thời, **tuyệt đối không phải ngưỡng production** (ngưỡng khuyến nghị khi có policy là $\ge 0.72$).
    - Không gắn độ chính xác của tập test vào checkpoint như một thuộc tính nội tại của mô hình.
+   - Hiện tại P05 chưa quay video thật, do đó **chưa có số liệu accuracy kiểm thử thực tế của P05**.
 
 ---
 
@@ -37,10 +38,10 @@ dataset/external_eval_v3/
 
 ### Quy mô dự kiến ban đầu (P05 Baseline)
 - **Đối tượng**: 1 người mới độc lập (`P05`).
-- **Số lượng nhãn**: Đủ 24 cử chỉ tương ứng với manifest `labels_v2_24.txt` và checkpoint `models/gesture_lstm.pt`.
-- **Số clip mỗi cử chỉ**: 2 clip mỗi cử chỉ (đảm bảo tính lặp lại tối thiểu).
+- **Số lượng nhãn**: Đủ đúng 24 cử chỉ tương ứng với manifest `labels_v2_24.txt` và checkpoint `models/gesture_lstm.pt` sau khi chuẩn hóa Unicode NFC.
+- **Số clip mỗi cử chỉ**: Đúng 2 clip mỗi cử chỉ (`--clips-per-label 2`).
 - **Tổng số clips**: 48 clips (1 người × 24 nhãn × 2 clips).
-- **Ràng buộc toàn vẹn**: 100% 48 clips chưa từng xuất hiện trong tập huấn luyện của bất kỳ fold nào (P01–P04).
+- **Ràng buộc toàn vẹn**: 100% 48 clips có SHA-256 độc nhất và chưa từng xuất hiện trong tập huấn luyện của bất kỳ fold nào (P01–P04).
 
 ---
 
@@ -53,6 +54,9 @@ vslr-eval `
   --data-dir dataset/external_eval_v3 `
   --model models/gesture_lstm.pt `
   --training-manifest runs/v2-4signers-24-20260907-005546/dataset_files_sha256.csv `
+  --run-manifest runs/v2-4signers-24-20260907-005546/RUN_MANIFEST.json `
+  --expected-signer P05 `
+  --clips-per-label 2 `
   --allow-uncalibrated `
   --confidence 0.50 `
   --output-dir evaluation/p05_baseline
@@ -64,61 +68,54 @@ Hỗ trợ kiểm tra nhanh một clip đã quay từ webcam:
 
 ```powershell
 vslr-eval `
-  --video "Xin chào=path/to/new_clip.mov" `
+  --video "Xin chào=path/to/webcam_clip.mov" `
   --model models/gesture_lstm.pt `
   --training-manifest runs/v2-4signers-24-20260907-005546/dataset_files_sha256.csv `
+  --run-manifest runs/v2-4signers-24-20260907-005546/RUN_MANIFEST.json `
   --allow-uncalibrated `
   --confidence 0.50
 ```
 
----
-
-## 4. Đặc tả Kỹ thuật của `vslr-eval`
-
-### 4.1. Cổng Kiểm soát Toàn vẹn (Integrity Gates)
-1. **Model Integrity Gate**:
-   - Nạp checkpoint bằng `load_checkpoint()`, kiểm tra `features_version == 3`, `feature_dim == 203`, `sequence_length == 60`.
-   - Kiểm tra class order của mô hình: 24 nhãn chuẩn Unicode NFC.
-   - Ghi nhận `checkpoint_sha256_before` và xác nhận lại `checkpoint_sha256_after == checkpoint_sha256_before` sau khi kết thúc đánh giá.
-2. **Leakage Gate**:
-   - Đọc danh sách SHA-256 từ tệp `--training-manifest` (nếu cung cấp).
-   - Tính toán SHA-256 của từng clip kiểm thử. Nếu tồn tại bất kỳ clip nào trùng mã băm SHA-256 với tập train, dừng chương trình ngay lập tức với mã lỗi khác 0 và chỉ rõ file trùng lặp.
-3. **Label Compatibility Gate**:
-   - Tên thư mục cử chỉ trong `--data-dir` (hoặc nhãn trong `--video`) phải thuộc tập 24 nhãn của checkpoint sau khi chuẩn hoá Unicode NFC (`normalise_label`). Bất kỳ nhãn lạ nào đều kích hoạt fail-closed.
-   - Hỗ trợ đầy đủ đường dẫn có ký tự tiếng Việt có dấu trên môi trường Windows.
-
-### 4.2. Suy diễn & Đo lường Chỉ số (Metrics & Scoring)
-1. **Suy diễn Top-K**:
-   - Trả về nhãn dự đoán Top-1 và xác suất tin cậy (Softmax confidence).
-   - Ghi nhận Top-3 dự đoán (danh sách gồm nhãn và xác suất) để phân tích lỗi tiệm cận.
-2. **Chính sách chấp nhận/từ chối (Accept / Reject)**:
-   - Nếu `confidence < threshold` (mặc định 0.50 cho demo/chẩn đoán): clip bị đánh dấu `accepted = False` (`status = REJECTED`).
-   - Nếu `confidence >= threshold`: clip được chấp nhận `accepted = True` (`status = ACCEPTED`).
-3. **Bộ chỉ số phân tách**:
-   - **Top-1 Raw Accuracy**: Tỉ lệ đoán đúng trên toàn bộ tập clip được đánh giá: $\frac{N_{\text{correct}}}{N_{\text{total}}}$.
-   - **Coverage**: Tỉ lệ clip được mô hình chấp nhận dự đoán: $\frac{N_{\text{accepted}}}{N_{\text{total}}}$.
-   - **Rejection Rate**: Tỉ lệ clip bị từ chối do không đủ độ tin cậy: $1 - \text{Coverage}$.
-   - **Accepted Accuracy**: Độ chính xác tính riêng trên các clip được chấp nhận: $\frac{N_{\text{correct\_and\_accepted}}}{N_{\text{accepted}}}$ (nếu $N_{\text{accepted}} = 0$, trả về 0.0).
-
-### 4.3. Báo cáo Xuất ra (`--output-dir`)
-1. `predictions.csv`:
-   - Các cột: `video_path`, `signer`, `ground_truth`, `predicted_top1`, `confidence`, `top2_label`, `top2_conf`, `top3_label`, `top3_conf`, `accepted`, `correct`.
-2. `metrics.json`:
-   - Ghi nhận toàn bộ thông tin môi trường, model SHA-256, số liệu tổng thể, per-label accuracy, số clip rejected, tham số đánh giá.
-3. `confusion_matrix.png`:
-   - Ma trận nhầm lẫn kích thước 24 × 24 vẽ bằng matplotlib.
-4. `REPORT.md`:
-   - Báo cáo tổng kết dễ đọc, bảng per-class accuracy, danh sách các clip bị từ chối hoặc dự đoán sai.
+*Lưu ý*: Chế độ clip đơn lẻ không áp dụng cổng kiểm tra 48 clips của thư mục, nhưng vẫn bắt buộc kiểm tra `--training-manifest` và `--run-manifest` để chống rò rỉ dữ liệu và khoá chặt mô hình.
 
 ---
 
-## 5. Kế hoạch TDD (Test-Driven Development)
+## 4. Các Cổng Kiểm soát Toàn vẹn (Integrity Gates)
 
-Tạo `tests/test_eval.py` bao phủ các trường hợp kiểm thử trước khi viết code triển khai:
-1. `test_detects_hash_overlap_with_training_manifest`: Dừng ngay khi clip test trùng SHA-256 với train.
-2. `test_rejects_unknown_label_not_in_checkpoint`: Từ chối nhãn không nằm trong danh sách 24 nhãn.
-3. `test_model_hash_unchanged_after_evaluation`: Trọng số checkpoint trên đĩa không bị biến đổi 1 bit nào trước và sau khi chạy eval.
-4. `test_metrics_calculation_top1_accepted_rejection_coverage`: Xác minh công thức toán học tính các chỉ số top-1, accepted accuracy, coverage và rejection rate.
-5. `test_output_artifacts_generated_correctly`: Xác minh sinh đủ `predictions.csv`, `metrics.json`, `REPORT.md`.
-6. `test_windows_unicode_paths`: Chạy mượt mà với đường dẫn thư mục tiếng Việt có dấu.
-7. `test_single_video_mode`: Chạy đúng với cú pháp `--video "Nhãn=path"`.
+1. **Run Manifest 3-Way Binding Gate (Bắt buộc)**:
+   - Cả hai chế độ đều yêu cầu `--run-manifest` (fail-closed nếu thiếu).
+   - Trước khi nạp MediaPipe hoặc suy diễn, đối soát chính xác 3 điều kiện:
+     - `SHA-256(--training-manifest) == RUN_MANIFEST.json.dataset_manifest_sha256`
+     - `SHA-256(model) == RUN_MANIFEST.json.checkpoint_sha256`
+     - `checkpoint.training_signature == RUN_MANIFEST.json.training_signature`
+   - Sai bất kỳ khoá nào: lập tức dừng (fail-closed), in `error: ...`, exit 2, không trích xuất đặc trưng, không inference, không ghi artifact.
+2. **Output Safety Gate**:
+   - Chặn `--output-dir` trùng hoặc nằm bên dưới `models/` (ngăn ô nhiễm checkpoint).
+   - Chặn `--output-dir` trùng thư mục cha của checkpoint hoặc thư mục dữ liệu (`--data-dir`).
+   - Nếu thư mục kết quả đã chứa artifacts cũ (`predictions.csv`, `metrics.json`), dừng chương trình trừ khi có cờ `--overwrite`.
+3. **Directory Completeness Gate** (Chế độ Thư mục):
+   - Bắt buộc khai báo ít nhất một người ký qua `--expected-signer` (ví dụ `--expected-signer P05`).
+   - Tham số `--clips-per-label` phải là số nguyên dương $\ge 1$ (mặc định: 2).
+   - Kiểm tra mô hình checkpoint có đúng 24 nhãn duy nhất sau chuẩn hóa Unicode NFC.
+   - Mỗi người ký phải có đủ chính xác 24 thư mục cử chỉ, không thiếu và không thừa nhãn.
+   - Mỗi thư mục cử chỉ phải chứa đúng số clip quy định (`--clips-per-label`).
+   - Chạy toàn bộ trước khi nạp MediaPipe để tiết kiệm thời gian.
+4. **Training Manifest Gate (Bắt buộc)**:
+   - Cả hai chế độ đều yêu cầu `--training-manifest` (fail-closed nếu thiếu).
+   - Mọi mã băm SHA-256 trong manifest phải hợp lệ: đúng 64 ký tự hex, lowercase, không rỗng, không trùng lặp.
+   - Nếu bất kỳ clip kiểm thử nào trùng mã băm với manifest, dừng ngay lập tức: `DATA LEAKAGE DETECTED`.
+5. **Test-Set Duplicate Gate**:
+   - Tính mã băm SHA-256 của toàn bộ clip kiểm thử trước inference. Nếu phát hiện 2 clip kiểm thử trùng byte nhau, từ chối đánh giá.
+6. **Unicode Normalization Gate**:
+   - Chuẩn hóa toàn bộ nhãn checkpoint và thư mục sang Unicode NFC trước khi so sánh, bảo đảm tương thích NFC/NFD.
+7. **Model Invariant Gate**:
+   - `model.requires_grad_(False)`, chạy dưới `torch.inference_mode()`.
+   - Kiểm tra mã băm SHA-256 của checkpoint trước và sau khi suy diễn trong khối `finally` (bảo đảm tính bất biến ngay cả khi có ngoại lệ).
+8. **Evaluation Provenance Gate**:
+   - `predictions.csv`: ghi nhận `video_path`, `video_sha256`, `model_sha256`, `signer`, `ground_truth`, `predicted_top1`, `confidence`, `top2`, `top3`, `accepted`, `correct`.
+   - `metrics.json`: ghi nhận đầy đủ provenance gồm `num_signers`, `signers`, `label_count`, `clips_per_label`, `total_clips`, `test_set_fingerprint`, `training_manifest_path`, `training_manifest_sha256`, `run_manifest_path`, `run_manifest_sha256`, `model_sha256`, `training_signature`, `confidence_threshold`, `reject_policy_calibrated`.
+   - `REPORT.md`: báo cáo tổng quan và chi tiết từng cử chỉ kèm provenance run manifest.
+   - `confusion_matrix.png`: ma trận nhầm lẫn kích thước 24 × 24.
+9. **CLI Error Handling Gate**:
+   - Mọi vi phạm cổng hoặc lỗi đầu vào dự kiến được in ngắn gọn dạng `error: <thông điệp>` ra `stderr`, không kèm traceback, thoát với mã lỗi exit 2.
+   - Các lỗi lập trình bất ngờ (`TypeError`, `AttributeError`, `KeyError`,...) không bị nuốt và hiển thị đầy đủ traceback để gỡ lỗi.

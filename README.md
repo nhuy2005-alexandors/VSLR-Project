@@ -42,6 +42,39 @@ vslr-camera --model models/gesture_lstm.pt --allow-uncalibrated --confidence 0.5
 
 Mỗi lần thực hiện xong một cử chỉ, hạ tay khoảng 0,45 giây. Sau cử chỉ cuối, giữ nghỉ khoảng 2,2 giây để hệ thống chốt câu. Phím `SPACE` chốt segment, `S` đọc ngay, `C` xóa câu, `Q` thoát.
 
+## Đánh giá Tập Kiểm thử Bên ngoài (`vslr-eval`)
+
+Công cụ suy diễn độc lập (inference-only, zero-training) để đánh giá mô hình trên người mới (ví dụ `P05`) hoặc video kiểm thử thực tế. Bắt buộc kiểm tra mã băm đối chiếu với `--training-manifest` và `--run-manifest` để chống rò rỉ dữ liệu (Zero Leakage Gate) và khoá chặt mô hình.
+
+### Đánh giá cây kiểm thử P05 (Directory Mode)
+
+```powershell
+vslr-eval `
+  --data-dir dataset/external_eval_v3 `
+  --model models/gesture_lstm.pt `
+  --training-manifest runs/v2-4signers-24-20260907-005546/dataset_files_sha256.csv `
+  --run-manifest runs/v2-4signers-24-20260907-005546/RUN_MANIFEST.json `
+  --expected-signer P05 `
+  --clips-per-label 2 `
+  --allow-uncalibrated `
+  --confidence 0.50 `
+  --output-dir evaluation/p05_baseline
+```
+
+### Đánh giá một clip đơn lẻ từ webcam (Single Clip Mode)
+
+```powershell
+vslr-eval `
+  --video "Xin chào=path/to/webcam_clip.mov" `
+  --model models/gesture_lstm.pt `
+  --training-manifest runs/v2-4signers-24-20260907-005546/dataset_files_sha256.csv `
+  --run-manifest runs/v2-4signers-24-20260907-005546/RUN_MANIFEST.json `
+  --allow-uncalibrated `
+  --confidence 0.50
+```
+
+*Ghi chú*: Người ký P05 hiện chưa có video thực tế trên đĩa nên chưa có số liệu accuracy kiểm thử thực tế. Ngưỡng `--confidence 0.50` chỉ là ngưỡng chẩn đoán/thử nghiệm, không phải ngưỡng production. Chi tiết đặc tả xem tại `docs/specs/external-evaluation.md`.
+
 ## Đánh giá Kỹ thuật (Candidate 24 Cử chỉ 4 Người ký)
 
 - **Kiến trúc**: MediaPipe Holistic v3 (`203` dims, `60` frames) + BiLSTM (`hidden_size=96`, bidirectional).
