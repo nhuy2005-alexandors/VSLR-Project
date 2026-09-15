@@ -131,6 +131,16 @@ def main() -> None:
     with open(run_dir / "loso_report.json", encoding="utf-8") as f:
         report = json.load(f)
 
+    # Check 24 labels against manifest
+    labels_file = Path("dataset/labels_v2_24.txt")
+    if labels_file.is_file():
+        expected_labels = [line.strip() for line in labels_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        report_labels = report.get("labels", [])
+        if report_labels != expected_labels:
+            errors.append(f"Labels in loso_report.json do not match {labels_file} in exact order")
+        if "Hẹn gặp lại" in report_labels:
+            errors.append("Forbidden label 'Hẹn gặp lại' found in loso_report.json")
+
     folds = report.get("folds", [])
     if len(folds) != 4:
         errors.append(f"Expected exactly 4 folds, got {len(folds)}")
@@ -177,6 +187,24 @@ def main() -> None:
     expected_pooled = total_correct / total_preds if total_preds > 0 else 0.0
     if abs(report.get("pooled_accuracy", 0.0) - expected_pooled) > 1e-6:
         errors.append(f"pooled_accuracy mismatch: {report.get('pooled_accuracy')} vs expected {expected_pooled}")
+
+    # Cross-check top3_predictions.json against loso_report.json predictions
+    top3_json_path = run_dir / "top3_loso_analysis" / "top3_predictions.json"
+    if top3_json_path.is_file():
+        with open(top3_json_path, encoding="utf-8") as f:
+            top3_preds = json.load(f)
+        if len(top3_preds) != len(all_preds):
+            errors.append(f"top3_predictions.json count {len(top3_preds)} != loso_report.json {len(all_preds)}")
+        else:
+            top3_by_video = {p["video"]: p for p in top3_preds}
+            for p in all_preds:
+                v = p.get("video")
+                if v not in top3_by_video:
+                    errors.append(f"Video {v} in loso_report.json not found in top3_predictions.json")
+                else:
+                    t3 = top3_by_video[v]
+                    if t3.get("top1_label") != p.get("predicted") or abs(t3.get("top1_confidence", 0) - p.get("confidence", 0)) > 1e-5:
+                        errors.append(f"Mismatch between loso_report.json and top3_predictions.json for {v}")
 
     if errors:
         print("FAIL: Data integrity gate errors:\n" + "\n".join(f"  - {e}" for e in errors), file=sys.stderr)
