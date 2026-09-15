@@ -47,6 +47,11 @@ from .vsl3.model import (
     GestureLSTM,
     save_checkpoint,
 )
+from .top3 import (
+    extract_topk,
+    build_top3_record,
+    validate_top3_row,
+)
 
 SINGLE_SIGNER = "unknown"
 VIDEO_SUFFIXES = {".mov", ".mp4"}
@@ -718,13 +723,26 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> tupl
             targets = targets.to(device)
             logits = model(features)
             total_loss += float(criterion(logits, targets)) * len(targets)
-            confidences, predicted = torch.softmax(logits, dim=1).max(dim=1)
+            probs = torch.softmax(logits, dim=1)
+            confidences, predicted = probs.max(dim=1)
             correct += int((predicted == targets).sum())
             total += len(targets)
-            for target, prediction, confidence in zip(
-                targets.tolist(), predicted.tolist(), confidences.tolist(), strict=True
-            ):
-                rows.append({"target": target, "predicted": prediction, "confidence": confidence})
+            topk_conf, topk_pred, margin = extract_topk(probs, k=3)
+            k = topk_conf.shape[1]
+            for i in range(len(targets)):
+                row_dict = {
+                    "target": targets[i].item(),
+                    "predicted": predicted[i].item(),
+                    "confidence": confidences[i].item(),
+                }
+                if k >= 2:
+                    row_dict["top2_predicted"] = topk_pred[i, 1].item()
+                    row_dict["top2_confidence"] = topk_conf[i, 1].item()
+                    row_dict["margin"] = margin[i].item()
+                if k >= 3:
+                    row_dict["top3_predicted"] = topk_pred[i, 2].item()
+                    row_dict["top3_confidence"] = topk_conf[i, 2].item()
+                rows.append(row_dict)
     return total_loss / max(total, 1), correct / max(total, 1), rows
 
 
@@ -1120,17 +1138,29 @@ def main() -> None:
                 [sequences[i] for i in val_idx], [targets[i] for i in val_idx], args
             )
             _, _, rows = evaluate(fold_model, fold_loader, device)
-            predictions = [
-                {
-                    "video": str(clips[clip_index].path),
-                    "person": clips[clip_index].person,
-                    "label": labels[row["target"]],
-                    "predicted": labels[row["predicted"]],
-                    "confidence": row["confidence"],
-                    "correct": row["target"] == row["predicted"],
-                }
-                for clip_index, row in zip(val_idx, rows, strict=True)
-            ]
+            predictions = []
+            for clip_index, row in zip(val_idx, rows, strict=True):
+                clip = clips[clip_index]
+                if "top3_predicted" in row:
+                    pred_item = build_top3_record(
+                        video=str(clip.path),
+                        person=clip.person,
+                        target_idx=row["target"],
+                        topk_indices=[row["predicted"], row["top2_predicted"], row["top3_predicted"]],
+                        topk_confidences=[row["confidence"], row["top2_confidence"], row["top3_confidence"]],
+                        margin=row["margin"],
+                        labels=labels,
+                    )
+                else:
+                    pred_item = {
+                        "video": str(clip.path),
+                        "person": clip.person,
+                        "label": labels[row["target"]],
+                        "predicted": labels[row["predicted"]],
+                        "confidence": row["confidence"],
+                        "correct": row["target"] == row["predicted"],
+                    }
+                predictions.append(pred_item)
             folds.append(
                 {
                     "held_out_person": val_person,
@@ -1156,6 +1186,9 @@ def main() -> None:
         total_correct = sum(round(fold["test_accuracy"] * fold["test_clips"]) for fold in folds)
         total_tested = sum(fold["test_clips"] for fold in folds)
         all_predictions = [row for fold in folds for row in fold["predictions"]]
+        for p in all_predictions:
+            if "top3_label" in p:
+                validate_top3_row(p)
         ranked = worst_labels(all_predictions, limit=5)
         # Validate the prediction/extraction join before publishing a report. A broken join means
         # the diagnostics do not describe the evaluated clips and must leave no success artifact.

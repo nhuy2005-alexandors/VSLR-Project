@@ -152,11 +152,12 @@ def main() -> None:
         if not p["correct"]:
             confusion_pairs[(p["label"], p["predicted"])] += 1
 
+    clips_per_label = total_tested // (len(folds) * num_labels) if (len(folds) * num_labels) > 0 else 0
     lines = [
         f"# Tóm tắt Đánh giá Thử nghiệm LOSO {len(folds)}-Fold",
         f"",
         f"- **Thời gian đánh giá**: {report.get('created_at', report.get('timestamp', '-'))}",
-        f"- **Tổng số clip test**: {total_tested} clips ({len(folds)} người ký x {num_labels} cử chỉ x 6 clips)",
+        f"- **Tổng số clip test**: {total_tested} clips ({len(folds)} người ký x {num_labels} cử chỉ x {clips_per_label} clips)",
         f"- **Số clip đoán đúng**: {total_correct} / {total_tested}",
         f"- **Pooled Accuracy**: {pooled:.2f}%",
         f"- **Macro Mean Accuracy**: {macro_mean:.2f}%",

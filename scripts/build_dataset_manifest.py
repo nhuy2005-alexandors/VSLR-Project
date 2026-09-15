@@ -1,18 +1,20 @@
-"""Verify dataset locking and generate dataset_files_sha256.csv for Phase 2."""
+"""Verify dataset locking and generate dataset_files_sha256.csv."""
 
 from __future__ import annotations
 
 import csv
 import hashlib
-import os
 import sys
-import unicodedata
 from pathlib import Path
 
 import cv2
 
 from prototype_3_gestures.prepare_train import file_sha256, load_directory_contract, validate_recording_tree
 from prototype_3_gestures.vsl3.labels import normalise_label
+
+
+class ManifestGateError(ValueError):
+    """Raised when dataset files violate the strict manifest contract."""
 
 
 def get_sha256(path: Path) -> str:
@@ -57,12 +59,14 @@ def main() -> None:
 
     # 3. Find all video files
     video_paths = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in {".mov", ".mp4"})
-    assert len(video_paths) == expected_clips, f"Expected exactly {expected_clips} videos, got {len(video_paths)}"
+    if len(video_paths) != expected_clips:
+        raise ManifestGateError(f"Expected exactly {expected_clips} videos, got {len(video_paths)}")
     print(f"Found {len(video_paths)} videos in {root}")
 
     # Ensure no .bak files in dataset
     bak_files = list(root.rglob("*.bak"))
-    assert len(bak_files) == 0, f"Found .bak files in dataset: {bak_files}"
+    if bak_files:
+        raise ManifestGateError(f"Found forbidden .bak files in dataset tree: {bak_files}")
     print("Checked no .bak files in dataset: PASS")
 
     # 4. Check each video metadata, hash, container
@@ -72,23 +76,28 @@ def main() -> None:
 
     for p in video_paths:
         parts = p.relative_to(root).parts
-        assert len(parts) == 3, f"Unexpected path structure: {p}"
+        if len(parts) != 3:
+            raise ManifestGateError(f"Unexpected path structure (expected Person/Label/File): {p}")
         person, label_dir, filename = parts
-        assert person in allowed_people, f"Invalid person {person}, not in allowed {allowed_people}: {p}"
-        
+        if person not in allowed_people:
+            raise ManifestGateError(f"Invalid person {person}, not in allowed {allowed_people}: {p}")
+
         # NFC label
         nfc_label = normalise_label(label_dir)
-        assert nfc_label in labels, f"Label {nfc_label} not in manifest"
+        if nfc_label not in labels:
+            raise ManifestGateError(f"Label {nfc_label!r} from {p} not found in manifest labels")
 
         # Unique relative path
         rel_posix = p.relative_to(root).as_posix()
-        assert rel_posix not in seen_paths, f"Duplicate path: {rel_posix}"
+        if rel_posix in seen_paths:
+            raise ManifestGateError(f"Duplicate relative path encountered: {rel_posix}")
         seen_paths.add(rel_posix)
 
         # File size and hash
         size_bytes = p.stat().st_size
         sha = file_sha256(p)
-        assert sha not in seen_hashes, f"Duplicate hash: {sha} at {p}"
+        if sha in seen_hashes:
+            raise ManifestGateError(f"Duplicate SHA-256 hash encountered: {sha} at {p}")
         seen_hashes.add(sha)
 
         # OpenCV inspection
@@ -102,11 +111,19 @@ def main() -> None:
         cap.release()
         duration = frames / fps if fps > 0 else -1.0
 
-        assert opened, f"Could not open video {p}"
-        assert ok, f"Could not read first frame of {p}"
-        assert width == 1920 and height == 1080, f"Unexpected resolution {width}x{height} for {p}"
-        assert 58.0 <= fps <= 62.0, f"Unexpected FPS {fps} for {p}"
-        assert 0.5 <= duration <= 10.0, f"Duration {duration:.3f}s out of bounds [0.5, 10.0] for {p}"
+        if not opened:
+            raise ManifestGateError(f"Could not open video file via OpenCV: {p}")
+        if not ok:
+            raise ManifestGateError(f"Could not decode first frame of video: {p}")
+        if not (width == 1920 and height == 1080):
+            raise ManifestGateError(f"Unexpected video resolution {width}x{height} for {p} (expected 1920x1080)")
+
+        # FPS contract: 53.0 to 65.0 fps (nominal 60fps with variable frame rate tolerance)
+        if not (53.0 <= fps <= 65.0):
+            raise ManifestGateError(f"Unexpected FPS {fps:.2f} for {p} (contract requires 53.0-65.0 VFR-compatible)")
+
+        if not (0.5 <= duration <= 10.0):
+            raise ManifestGateError(f"Duration {duration:.3f}s out of bounds [0.5, 10.0] for {p}")
 
         rows.append({
             "relative_path": rel_posix,
@@ -121,9 +138,10 @@ def main() -> None:
             "duration": round(duration, 4),
         })
 
-    assert len(seen_hashes) == expected_clips, f"Expected {expected_clips} unique hashes, got {len(seen_hashes)}"
+    if len(seen_hashes) != expected_clips:
+        raise ManifestGateError(f"Expected {expected_clips} unique hashes, got {len(seen_hashes)}")
     print(f"{expected_clips} unique paths and {expected_clips} unique SHA-256 hashes: PASS")
-    print("100% videos are 1920x1080 ~60fps and duration in [0.5, 10.0]s: PASS")
+    print("100% videos are 1920x1080, FPS within 53-65 (VFR-compatible) and duration in [0.5, 10.0]s: PASS")
 
     # Write CSV
     with open(out_csv, "w", encoding="utf-8", newline="") as f:
