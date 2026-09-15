@@ -1,8 +1,42 @@
 # Checkpoint — VSLR
 
-_Cập nhật: 2026-09-07_
+_Cập nhật: 2026-09-16 (Overnight Run: Nghiệm thu LOSO 13-epoch & Huấn luyện Ship Candidate V3)_
 
 ## Done
+
+- **Nghiệm thu Độc lập & Đóng băng Lựa chọn Siêu tham số LOSO V3 13-epoch**:
+  - Run nghiệm thu: `runs/v3-4signers-24-8clips-20260915-215753/`.
+  - Cơ sở lựa chọn `epochs=13`: **development-selected epoch count** từ lịch sử hội tụ LOSO trên tập phát triển, chưa phải external validation optimum.
+  - Kết quả tái tính toán độc lập từ raw `folds[].predictions` (768 predictions):
+    - **Pooled Accuracy**: 98.5677% (757 / 768 clips đúng).
+    - **Macro Mean Accuracy**: 98.5677%.
+    - **Top-3 Accuracy**: 99.3490% (763 / 768 clips đúng top-3).
+    - Fold P01: 192/192 (100.00%), loss 0.0261.
+    - Fold P02: 189/192 (98.44%), loss 0.1544.
+    - Fold P03: 187/192 (97.40%), loss 0.1433 (worst fold).
+    - Fold P04: 189/192 (98.44%), loss 0.1127.
+  - 6 nhãn trọng điểm lịch sử:
+    - `Sao thế`: 32/32 (100.00%)
+    - `Được không`: 32/32 (100.00%)
+    - `Bạn tên gì`: 31/32 (96.88%), 1 clip nhầm sang `Bạn đang làm gì`
+    - `Tôi khỏe`: 32/32 (100.00%)
+    - `Bạn có vấn đề gì không`: 32/32 (100.00%)
+    - `Bạn đang làm gì`: 32/32 (100.00%)
+  - Độc lập kiểm định fail-closed: `python scripts/verify_v3_run.py` đạt **exit code 0**, 20 file artifacts đầy đủ, 19 file trong `SHA256SUMS.txt` khớp byte không BOM, 0 rò rỉ dữ liệu P05.
+  - Reviewer độc lập: Đạt **PASS with should-fix** (toàn bộ khuyến nghị đã được xử lý và commit vào git).
+
+- **Huấn luyện & Niêm phong Ship Candidate V3 (`runs/v3-ship-4signers-24-8clips-13ep-20260916-020145`)**:
+  - Dữ liệu huấn luyện: Toàn bộ 768 clips P01–P04 từ `dataset/recordings_v3_4x24_8`.
+  - Thuật toán & Cấu hình đóng băng: `epochs=13`, `augment=120`, `batch_size=32`, `lr=0.001`, `seed=42`, `num_workers=4`, cache `dataset/processed/landmark_cache_v3_4x24_8`.
+  - Checkpoint: `runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/gesture_lstm.pt` (SHA-256: `e7a85bf25eee163ddcfd37a98b1b4b6cc0ec06a4b524d0daced3fe67a89d1fa4`).
+  - Khóa ba chiều: `training_signature = 918588dedeb2e9bdb2dabf8a2f8ac843aa6cf66dc68d61c2e8acb1e4b07a65cf` khớp 100% giữa `loso_report.json`, `metrics.json`, và `gesture_lstm.pt` (`PAIR OK`).
+  - Hồ sơ niêm phong: `RUN_MANIFEST.json` và `SHA256SUMS.txt` (20 files, UTF-8 no BOM).
+  - Bất biến mô hình sản xuất: Checkpoint `models/gesture_lstm.pt` giữ nguyên tuyệt đối SHA-256 `5e202eb9108c06e446da5ae1d27aaebcec7e14cb2e72a9c233c4ac99da245b83`.
+
+- **Chuẩn bị Sẵn sàng Lệnh Đánh giá Ngoài P05 (Dry Run / No Inference)**:
+  - Tập kiểm thử ngoài: `dataset/external_eval_v3/P05` (48 clips = 24 nhãn x 2 clips, 100% độc nhất, 0 mã băm trùng lặp với tập train 768 clips).
+  - Cổng Run Manifest Gate của `vslr-eval` đã kiểm thử logic và xác nhận khớp 3 chiều trước khi chạy thật.
+  - Tuyệt đối KHÔNG thực hiện suy diễn (inference) hay tính accuracy P05 trong phiên overnight.
 
 - **Hoàn thành Xây dựng & Siết chặt Công cụ Đánh giá Ngoài Độc lập (`vslr-eval`)**:
   - Module: `src/prototype_3_gestures/evaluate.py`.
@@ -89,13 +123,27 @@ _Cập nhật: 2026-09-07_
 
 ## Next
 
-0. **Đã thêm `vslr-sentence`** — đo ghép câu offline bằng FPS/timestamp, shared SegmentTracker/preprocessing/reject; còn cần quay clip câu + CSV và calibration negative riêng để có metric thật.
+0. **Root duyệt báo cáo nghiệm thu overnight & Ship Candidate V3**:
+   - Run candidate: `runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/`.
+   - Trạng thái hiện tại: `READY_FOR_P05_FINAL_REVIEW`.
 
-1. Chạy dry-run rồi tạo cây mới bằng `vslr-init-dataset --data-dir dataset/recordings_v1 --people-count 4`.
-2. Nạp video theo `dataset/recordings_v1/P01/<Nhãn tiếng Việt>/001.mov`, đủ 6 clip mỗi nhãn; chạy `vslr-check` ngay sau P01.
-3. Sau ít nhất 2 người đủ mọi nhãn, chạy LOSO. Khi đủ người, giữ report có `training_signature` cuối.
-4. Chỉ sau khi chủ dự án đồng ý ghi đè artifact: backup model hiện tại rồi chạy mode ship với **cùng** config/signature.
-5. Test `vslr-camera --no-tts` thật bằng checkpoint v3 mới; checkpoint hiện tại cũ bị chặn đúng thiết kế, không có bypass incompatible. Trước calibration, segment vẫn reject fail-closed.
+1. **Chạy đánh giá ngoài độc lập P05** (chỉ chạy khi Root trực tiếp phê duyệt):
+   ```powershell
+   vslr-eval `
+     --data-dir dataset/external_eval_v3 `
+     --model runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/gesture_lstm.pt `
+     --training-manifest runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/dataset_files_sha256.csv `
+     --run-manifest runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/RUN_MANIFEST.json `
+     --expected-signer P05 `
+     --clips-per-label 2 `
+     --allow-uncalibrated `
+     --confidence 0.50 `
+     --output-dir evaluation/p05-v3-final-20260916
+   ```
+
+2. **Chỉ sau khi Root duyệt kết quả P05**: Cân nhắc sao lưu `models/gesture_lstm.pt` hiện tại rồi cập nhật model production. Chạy calibration reject policy trên dữ liệu âm bản độc lập trước khi kích hoạt TTS webcam.
+
+3. **Chạy dry-run rồi tạo cây mới bằng `vslr-init-dataset --data-dir dataset/recordings_v1 --people-count 4`** nếu cần mở rộng tập 30 cử chỉ V1 sau này.
 
 ## Verify
 
