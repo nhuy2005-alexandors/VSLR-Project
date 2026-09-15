@@ -2,7 +2,7 @@ param (
     [int]$Epochs = 13
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $PSNativeCommandUseErrorActionPreference = $false
 
 Set-Location "D:\Dev\Workspaces\VSLR-Workspace"
