@@ -1,8 +1,28 @@
 # Checkpoint — VSLR
 
-_Cập nhật: 2026-09-16 (Overnight Run: Nghiệm thu LOSO 13-epoch & Huấn luyện Ship Candidate V3)_
+_Cập nhật: 2026-09-16 (Hoàn thành Đánh giá Ngoài Độc lập P05 trên Candidate V3 13-epoch)_
 
 ## Done
+
+- **Hoàn thành Đánh giá Ngoài Độc lập P05 (External Evaluation) — Chạy đúng 1 lần duy nhất**:
+  - Thư mục kết quả: `evaluation/p05-v3-final-20260916/`.
+  - Checkpoint đánh giá: `runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/gesture_lstm.pt` (SHA-256 `e7a85bf25eee163ddcfd37a98b1b4b6cc0ec06a4b524d0daced3fe67a89d1fa4`).
+  - Dữ liệu đánh giá: `dataset/external_eval_v3/P05` (người ký P05, 24 nhãn x 2 clips = 48 clips; 100% độc nhất, 0 mã băm trùng với tập train 768 clips).
+  - Test set fingerprint: `0ac379cb4185e46b0cf24215e120b644458fd6aceda8fd03008b4648932a5bc8`.
+  - Kết quả kiểm toán độc lập trên 48 clips thô:
+    - **Raw Top-1 Accuracy**: **100.00% (48 / 48 clips đúng)** — Đây là thước đo chính (primary generalization metric).
+    - **Top-3 Accuracy**: **100.00% (48 / 48 clips đúng)**.
+    - **Tỉ lệ Chấp nhận (Coverage)** với ngưỡng chẩn đoán 0.50: **100.00% (48 / 48 clips)**.
+    - **Tỉ lệ Từ chối (Rejection Rate)**: **0.00% (0 / 48 clips)**.
+    - **Accepted Accuracy**: **100.00% (48 / 48 clips)**.
+    - Độ tin cậy Top-1: min 0.5812, mean 0.9669, max 0.9868.
+    - Khoảng cách Top-1 và Top-2 (margin): min 0.3960, mean 0.9615.
+    - Số lỗi Top-1: **0**. Toàn bộ 24/24 nhãn đạt 2/2 clips đúng.
+  - Niêm phong & Kiểm định:
+    - `PROVENANCE_MANIFEST.json` ghi nhận cờ `P05_OPENED: true` vào lúc `2026-09-16T00:49:19.5200192Z`.
+    - `SHA256SUMS.txt` (UTF-8 không BOM) bao phủ toàn bộ 7 artifacts, 0 mismatch.
+    - Reviewer độc lập: Đạt **PASS** (14/14 tiêu chí toàn vẹn đều đạt).
+    - Bất biến mô hình sản xuất: Checkpoint `models/gesture_lstm.pt` giữ nguyên tuyệt đối SHA-256 `5e202eb9108c06e446da5ae1d27aaebcec7e14cb2e72a9c233c4ac99da245b83`.
 
 - **Nghiệm thu Độc lập & Đóng băng Lựa chọn Siêu tham số LOSO V3 13-epoch**:
   - Run nghiệm thu: `runs/v3-4signers-24-8clips-20260915-215753/`.
@@ -123,27 +143,16 @@ _Cập nhật: 2026-09-16 (Overnight Run: Nghiệm thu LOSO 13-epoch & Huấn lu
 
 ## Next
 
-0. **Root duyệt báo cáo nghiệm thu overnight & Ship Candidate V3**:
-   - Run candidate: `runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/`.
-   - Trạng thái hiện tại: `READY_FOR_P05_FINAL_REVIEW`.
+0. **Root duyệt kết quả P05 & Quyết định Phát hành (Promotion / Release)**:
+   - Checkpoint Candidate V3: `runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/gesture_lstm.pt` (SHA-256 `e7a85bf25eee163ddcfd37a98b1b4b6cc0ec06a4b524d0daced3fe67a89d1fa4`).
+   - Đánh giá ngoài P05: Đạt 100.00% Raw Top-1 Accuracy (48/48 clips đúng).
+   - Quyết định Root: Sao lưu `models/gesture_lstm.pt` hiện tại, cập nhật checkpoint candidate thành model production và cập nhật MODEL_CARD / README nếu được duyệt.
 
-1. **Chạy đánh giá ngoài độc lập P05** (chỉ chạy khi Root trực tiếp phê duyệt):
-   ```powershell
-   vslr-eval `
-     --data-dir dataset/external_eval_v3 `
-     --model runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/gesture_lstm.pt `
-     --training-manifest runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/dataset_files_sha256.csv `
-     --run-manifest runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/RUN_MANIFEST.json `
-     --expected-signer P05 `
-     --clips-per-label 2 `
-     --allow-uncalibrated `
-     --confidence 0.50 `
-     --output-dir evaluation/p05-v3-final-20260916
-   ```
+1. **Thu thập tập Negative / OOD và Calibration Reject Policy**:
+   - Hiện tại policy vẫn ở trạng thái `reject_policy_calibrated: false` (ngưỡng 0.50 chỉ là chẩn đoán).
+   - Cần quay/thu thập tập cử chỉ ngẫu nhiên ngoài từ điển (OOD) và chuyển động tĩnh (idle stationary) để fit ngưỡng reject tự động trước khi tích hợp TTS vào camera thời gian thực.
 
-2. **Chỉ sau khi Root duyệt kết quả P05**: Cân nhắc sao lưu `models/gesture_lstm.pt` hiện tại rồi cập nhật model production. Chạy calibration reject policy trên dữ liệu âm bản độc lập trước khi kích hoạt TTS webcam.
-
-3. **Chạy dry-run rồi tạo cây mới bằng `vslr-init-dataset --data-dir dataset/recordings_v1 --people-count 4`** nếu cần mở rộng tập 30 cử chỉ V1 sau này.
+2. **Chạy dry-run rồi tạo cây mới bằng `vslr-init-dataset --data-dir dataset/recordings_v1 --people-count 4`** nếu cần mở rộng tập 30 cử chỉ V1 sau này.
 
 ## Verify
 
