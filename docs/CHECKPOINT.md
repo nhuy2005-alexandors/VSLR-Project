@@ -4,8 +4,9 @@ _Cập nhật: 2026-09-16 (Hoàn thành Đánh giá Ngoài Độc lập P05 trê
 
 ## Done
 
-- **Hoàn thành Đánh giá Ngoài Độc lập P05 (External Evaluation) — Chạy đúng 1 lần duy nhất**:
-  - Thư mục kết quả: `evaluation/p05-v3-final-20260916/`.
+- **Hoàn thành Đánh giá Ngoài Độc lập P05 (External Evaluation) — ĐÃ ĐÓNG & NIÊM PHONG**:
+  - **`P05_CONSUMED = true`**: Tập dữ liệu P05 đã tiêu thụ hoàn toàn cho một lần đánh giá duy nhất. Vĩnh viễn không được coi là "unseen" hay tái sử dụng cho bất kỳ vòng lựa chọn mô hình, tuning siêu tham số hoặc hiệu chuẩn ngưỡng nào.
+  - Thư mục kết quả bất biến: `evaluation/p05-v3-final-20260916/`.
   - Checkpoint đánh giá: `runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/gesture_lstm.pt` (SHA-256 `e7a85bf25eee163ddcfd37a98b1b4b6cc0ec06a4b524d0daced3fe67a89d1fa4`).
   - Dữ liệu đánh giá: `dataset/external_eval_v3/P05` (người ký P05, 24 nhãn x 2 clips = 48 clips; 100% độc nhất, 0 mã băm trùng với tập train 768 clips).
   - Test set fingerprint: `0ac379cb4185e46b0cf24215e120b644458fd6aceda8fd03008b4648932a5bc8`.
@@ -23,6 +24,12 @@ _Cập nhật: 2026-09-16 (Hoàn thành Đánh giá Ngoài Độc lập P05 trê
     - `SHA256SUMS.txt` (UTF-8 không BOM) bao phủ toàn bộ 7 artifacts, 0 mismatch.
     - Reviewer độc lập: Đạt **PASS** (14/14 tiêu chí toàn vẹn đều đạt).
     - Bất biến mô hình sản xuất: Checkpoint `models/gesture_lstm.pt` giữ nguyên tuyệt đối SHA-256 `5e202eb9108c06e446da5ae1d27aaebcec7e14cb2e72a9c233c4ac99da245b83`.
+
+- **Khởi lập Tiền đăng ký Nghiệm thu Realtime, OOD & Rejection Calibration (V3 Acceptance Spec)**:
+  - Tài liệu spec: `docs/specs/realtime-acceptance.md` (phiên bản 1.0, Tiền đăng ký Đóng băng).
+  - Khóa danh mục thử nghiệm 12 kịch bản A–L (Known, Neutral/Rest, Random, Partial, Transition, Entry/Exit, Missing hand, Occlusion, Off-center, Distance, Lighting, Background).
+  - Tách rời hoàn toàn dữ liệu Hiệu chuẩn (Calibration Split) và Nghiệm thu Cuối (Acceptance Split) độc lập với P01–P04 và P05.
+  - Trạng thái hiện tại: `HOLD` (chờ thu thập dữ liệu calibration và acceptance thực tế trước khi ra quyết định promotion).
 
 - **Nghiệm thu Độc lập & Đóng băng Lựa chọn Siêu tham số LOSO V3 13-epoch**:
   - Run nghiệm thu: `runs/v3-4signers-24-8clips-20260915-215753/`.
@@ -143,16 +150,21 @@ _Cập nhật: 2026-09-16 (Hoàn thành Đánh giá Ngoài Độc lập P05 trê
 
 ## Next
 
-0. **Root duyệt kết quả P05 & Quyết định Phát hành (Promotion / Release)**:
-   - Checkpoint Candidate V3: `runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/gesture_lstm.pt` (SHA-256 `e7a85bf25eee163ddcfd37a98b1b4b6cc0ec06a4b524d0daced3fe67a89d1fa4`).
-   - Đánh giá ngoài P05: Đạt 100.00% Raw Top-1 Accuracy (48/48 clips đúng).
-   - Quyết định Root: Sao lưu `models/gesture_lstm.pt` hiện tại, cập nhật checkpoint candidate thành model production và cập nhật MODEL_CARD / README nếu được duyệt.
+0. **Nghiệm thu Realtime + OOD + Rejection Calibration (Spec: `docs/specs/realtime-acceptance.md`)**:
+   - Trạng thái hiện tại: **`HOLD`** (Không tự động phát hành production checkpoint).
+   - Checkpoint Candidate V3: `runs/v3-ship-4signers-24-8clips-13ep-20260916-020145/gesture_lstm.pt` (SHA-256 `e7a85bf25eee163ddcfd37a98b1b4b6cc0ec06a4b524d0daced3fe67a89d1fa4`) tiếp tục đóng băng.
+   - P05 đã bị tiêu thụ (`P05_CONSUMED = true`), tuyệt đối KHÔNG tái sử dụng cho calibration hay model selection.
 
-1. **Thu thập tập Negative / OOD và Calibration Reject Policy**:
-   - Hiện tại policy vẫn ở trạng thái `reject_policy_calibrated: false` (ngưỡng 0.50 chỉ là chẩn đoán).
-   - Cần quay/thu thập tập cử chỉ ngẫu nhiên ngoài từ điển (OOD) và chuyển động tĩnh (idle stationary) để fit ngưỡng reject tự động trước khi tích hợp TTS vào camera thời gian thực.
+1. **Thu thập Dữ liệu Hiệu chuẩn Tách biệt (Calibration Dataset)**:
+   - Thu thập Positive (trong từ điển) và Negative/OOD (`idle_stationary`, `oov_motion`, transitions, partial, occlusions) độc lập với P01–P04 và P05.
+   - Fit chính sách từ chối đa chiều và đóng băng ngưỡng TRƯỚC khi chạy tập nghiệm thu.
 
-2. **Chạy dry-run rồi tạo cây mới bằng `vslr-init-dataset --data-dir dataset/recordings_v1 --people-count 4`** nếu cần mở rộng tập 30 cử chỉ V1 sau này.
+2. **Thu thập Dữ liệu Nghiệm thu Thời gian thực Đa Người ký (Acceptance Dataset)**:
+   - Thu thập trên tối thiểu 2 người ký độc lập mới (`R01`, `R02`...) bao phủ 12 danh mục A–L.
+   - Đo lường và báo cáo tách biệt 3 khối chỉ số: Known-gesture, Negative/OOD, Temporal stability.
+   - Chỉ chuyển trạng thái sang `READY_FOR_PRODUCTION_PROMOTION` sau khi vượt qua toàn bộ tiêu chuẩn nghiệm thu và review độc lập.
+
+3. **Chạy dry-run rồi tạo cây mới bằng `vslr-init-dataset --data-dir dataset/recordings_v1 --people-count 4`** nếu cần mở rộng tập 30 cử chỉ V1 sau này.
 
 ## Verify
 

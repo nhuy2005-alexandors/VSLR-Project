@@ -577,6 +577,17 @@ class CheckpointContractTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             build_sentence_parser().parse_args(["--clip", "clip.mov", "--allow-incompatible-model"])
 
+    def test_realtime_parser_cooldown_argument_and_validation(self):
+        from prototype_3_gestures.realtime import _validate_args, build_parser as build_realtime_parser
+
+        parser = build_realtime_parser()
+        args = parser.parse_args(["--cooldown", "2.5"])
+        self.assertEqual(args.cooldown, 2.5)
+
+        invalid_args = parser.parse_args(["--cooldown", "-0.5"])
+        with self.assertRaises(SystemExit):
+            _validate_args(invalid_args, parser)
+
 
 class SentenceHelpersTests(unittest.TestCase):
     def test_edit_distance_and_wer_and_csv_ground_truth(self):

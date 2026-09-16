@@ -136,4 +136,17 @@ Quyết định kiến trúc + LÝ DO. Tích lũy, không xóa.
   5. Toàn bộ kết quả xuất vào `--output-dir` gồm `predictions.csv`, `metrics.json`, `REPORT.md`, `confusion_matrix.png`; không ghi đè vào `models/`.
 - **Trade-offs**: Clip kiểm thử phải qua trích xuất MediaPipe và hash SHA-256 từng file trước khi suy diễn. Đổi lại, kết quả đánh giá hoàn toàn minh bạch, khách quan, không thể bị nghi ngờ rò rỉ dữ liệu hay thay đổi trọng số mô hình.
 
+## ADR-017: Đóng băng Kết quả P05 (`P05_CONSUMED = true`) & Tiền đăng ký Chốt Nghiệm thu Realtime + OOD + Calibration
+
+- **Date**: 2026-09-16
+- **Context**: Đánh giá ngoài P05 trên Candidate V3 13-epoch (`e7a85bf25eee...`) đạt 100.00% (48/48 clips đúng). Tuy nhiên, sau khi mở niêm phong và đánh giá, tập P05 đã bị tiêu thụ (consumed) và không còn là tập kiểm thử chưa từng thấy (unseen). Nếu tái sử dụng P05 để tinh chỉnh ngưỡng từ chối (rejection threshold) hoặc lựa chọn mô hình sẽ gây overfitting và vi phạm tính khách quan. Đồng thời, nhận diện webcam thời gian thực đối mặt với nhiều phân phối ngoài từ điển (OOD: nghỉ, cử động ngẫu nhiên, chuyển tiếp, che khuất, thiếu tay, thay đổi ánh sáng) mà một số accuracy offline không phản ánh được.
+- **Decision**:
+  1. Ghi nhận vĩnh viễn trạng thái `P05_CONSUMED = true`. Đóng băng tuyệt đối thư mục chứng cứ `evaluation/p05-v3-final-20260916/`. Cấm tuyệt đối việc tái sử dụng P05 cho calibration hoặc model selection.
+  2. Không huấn luyện lại, không fine-tune, không ghi đè tự động lên `models/gesture_lstm.pt`.
+  3. Tiền đăng ký (pre-register) bộ tiêu chuẩn nghiệm thu Realtime + OOD (`docs/specs/realtime-acceptance.md`) gồm 12 kịch bản A–L trước khi tiến hành thử nghiệm camera.
+  4. Thu thập tập Calibration riêng biệt (chứa cả positive và negative: idle/OOV/transition/occlusion) để fit chính sách từ chối đa chiều (Top-1 confidence, margin, dwell duration, presence quality).
+  5. Bổ sung cơ chế an toàn thời gian thực: cấm kích hoạt TTS từ 1 frame đơn lẻ, xác nhận thời lượng liên tục ($\ge 0.35$s), duplicate phrase suppression cooldown ($1.5$s), reset khi bị reject, và khoảng lặng câu ($2.2$s).
+  6. Nghiệm thu trên tập Acceptance riêng biệt gồm tối thiểu 2 người ký mới (R01, R02...), báo cáo tách biệt 3 nhóm chỉ số (Known-gesture, Negative/OOD, Temporal stability).
+- **Trade-offs**: Cần thêm công đoạn thu thập dữ liệu calibration và acceptance thực tế từ nhiều người ký trước khi có thể phát hành chính thức lên production. Đổi lại, mô hình khi tích hợp vào webcam sẽ triệt tiêu hiện tượng nói nhảm, nói lặp hoặc phát âm sai lệch khi người dùng chưa làm cử chỉ.
+
 

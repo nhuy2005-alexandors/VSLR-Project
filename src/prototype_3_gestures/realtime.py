@@ -521,6 +521,8 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     for name, value in (("--word-gap", args.word_gap), ("--sentence-gap", args.sentence_gap)):
         if not math.isfinite(value) or value <= 0.0:
             parser.error(f"{name} must be finite and > 0, got {value}")
+    if not math.isfinite(args.cooldown) or args.cooldown < 0.0:
+        parser.error(f"--cooldown must be finite and >= 0, got {args.cooldown}")
     if not math.isfinite(args.min_seconds) or args.min_seconds <= 0.0:
         parser.error(f"--min-seconds must be finite and > 0, got {args.min_seconds}")
     if not math.isfinite(args.max_seconds) or args.max_seconds < args.min_seconds:
@@ -546,6 +548,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.45,
         help="Inactive/resting-hand gap that ends one gesture",
+    )
+    parser.add_argument(
+        "--cooldown",
+        type=float,
+        default=1.5,
+        help="Duplicate phrase suppression cooldown in seconds (0 to disable)",
     )
     parser.add_argument("--sentence-gap", type=float, default=2.2, help="Additional idle time before speaking")
     parser.add_argument(
@@ -600,9 +608,11 @@ def main() -> None:
     sentence: list[str] = []
     tracker = SegmentTracker(args.word_gap, args.max_seconds, min_active_seconds=args.min_seconds)
     last_sentence_activity = time.monotonic()
+    last_accepted_label: str | None = None
+    last_accepted_time: float = 0.0
 
     def handle_segment(segment: Segment | None) -> None:
-        nonlocal last_sentence_activity
+        nonlocal last_sentence_activity, last_accepted_label, last_accepted_time
         if segment is None or segment.duration < args.min_seconds:
             return
         decision = decide_segment(
@@ -615,13 +625,26 @@ def main() -> None:
             reject_policy=policy,
             allow_uncalibrated=args.allow_uncalibrated,
         )
+        now_seg = time.monotonic()
         if decision.accepted:
+            if (
+                args.cooldown > 0
+                and decision.label == last_accepted_label
+                and (now_seg - last_accepted_time) < args.cooldown
+            ):
+                print(
+                    f"COOLDOWN> Suppressed duplicate {decision.label} within {args.cooldown:.1f}s"
+                )
+                return
+            last_accepted_label = decision.label
+            last_accepted_time = now_seg
             sentence.append(decision.label)
             print(
                 f"WORD> {decision.label} ({decision.confidence:.1%}) | sentence: {' '.join(sentence)}"
             )
-            last_sentence_activity = time.monotonic()
+            last_sentence_activity = now_seg
         else:
+            last_accepted_label = None
             print(f"REJECT> {decision.label} ({decision.confidence:.1%}) — {decision.reason}")
 
     def speak_sentence(now: float) -> None:
@@ -682,6 +705,8 @@ def main() -> None:
                 if key == ord("c"):
                     tracker.reset()
                     sentence.clear()
+                    last_accepted_label = None
+                    last_accepted_time = 0.0
                     print("Sentence cleared")
                 elif key == ord("s"):
                     speak_sentence(now)
