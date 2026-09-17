@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import mediapipe as mp
@@ -51,6 +52,8 @@ class FrameObservation:
     features: np.ndarray
     left_hand_present: bool
     right_hand_present: bool
+    results: Any = None
+    raw_landmarks: np.ndarray | None = None
 
     @property
     def hands_present(self) -> bool:
@@ -524,7 +527,11 @@ class HolisticExtractor:
         results = holistic.process(rgb)
         points, left_present, right_present = _to_landmark_array(results)
         return FrameObservation(
-            normalize_landmarks(points, left_present, right_present), left_present, right_present
+            normalize_landmarks(points, left_present, right_present),
+            left_present,
+            right_present,
+            results=results,
+            raw_landmarks=points,
         )
 
     def process_frame(self, frame_bgr: np.ndarray) -> FrameObservation:

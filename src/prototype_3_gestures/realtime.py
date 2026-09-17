@@ -32,6 +32,12 @@ from .vsl3.reject import (
     reject_prediction,
     sha256_file,
 )
+from .tts import TTSManager, speak_text as tts_speak_text
+try:
+    from .recorder import GestureVideoRecorder, draw_unicode_text
+except ImportError:
+    from prototype_3_gestures.recorder import GestureVideoRecorder, draw_unicode_text
+import mediapipe as mp
 
 configure_utf8_stdio()
 
@@ -77,36 +83,7 @@ def gesture_activity_from_features(
 
 
 def speak_text(text: str) -> None:
-    print(f"TTS> {text}")
-    try:
-        import pyttsx3  # type: ignore
-
-        engine = pyttsx3.init()
-        engine.say(text)
-        engine.runAndWait()
-        return
-    except Exception:
-        pass
-
-    if os.name == "nt":
-        script = (
-            "Add-Type -AssemblyName System.Speech; "
-            "$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            "$speaker.Speak([Console]::In.ReadToEnd())"
-        )
-        try:
-            subprocess.run(
-                ["powershell", "-NoProfile", "-Command", script],
-                input=text,
-                text=True,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return
-        except OSError:
-            pass
-    print("TTS backend unavailable; sentence was printed instead.", file=sys.stderr)
+    tts_speak_text(text)
 
 
 @dataclass(frozen=True)
@@ -250,6 +227,7 @@ class SegmentDecision:
     confidence: float
     accepted: bool
     reason: str
+    probabilities: np.ndarray | None = None
 
 
 def decide_segment(
@@ -271,7 +249,7 @@ def decide_segment(
         manual_threshold=confidence_threshold,
         allow_uncalibrated=allow_uncalibrated,
     )
-    return SegmentDecision(label, confidence, accepted, reason)
+    return SegmentDecision(label, confidence, accepted, reason, probabilities=probabilities)
 
 
 class SegmentTracker:
@@ -532,10 +510,47 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         )
 
 
+def list_available_cameras() -> list[str]:
+    """List available DirectShow camera devices on Windows."""
+    try:
+        import pygrabber.dshow_graph
+
+        graph = pygrabber.dshow_graph.FilterGraph()
+        return graph.get_input_devices()
+    except Exception:
+        return []
+
+
+def resolve_camera(camera_arg: str | int) -> tuple[int, str]:
+    """Resolve camera index and human-readable name from integer or name string."""
+    devices = list_available_cameras()
+    arg_str = str(camera_arg).strip()
+
+    try:
+        idx = int(arg_str)
+        if idx >= 0:
+            name = devices[idx] if 0 <= idx < len(devices) else f"Camera #{idx}"
+            return idx, name
+    except ValueError:
+        pass
+
+    query = arg_str.lower()
+    for idx, dev_name in enumerate(devices):
+        if query in dev_name.lower():
+            return idx, dev_name
+
+    available = ", ".join(f"[{i}] {name}" for i, name in enumerate(devices)) if devices else "None detected"
+    raise ValueError(f"Cannot find camera matching '{camera_arg}'. Available cameras: {available}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Realtime VSL gesture -> sentence -> TTS demo")
     parser.add_argument("--model", default="models/gesture_lstm.pt")
-    parser.add_argument("--camera", type=int, default=0)
+    parser.add_argument(
+        "--camera",
+        default="0",
+        help="Camera index (0, 1) hoặc tên camera (ví dụ: 'A16' hoặc 'Webcam')",
+    )
     parser.add_argument("--confidence", type=float, default=0.72)
     parser.add_argument("--reject-policy", help="Calibrated reject-policy JSON; absent means uncalibrated")
     parser.add_argument(
@@ -569,6 +584,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hard cap on one gesture; the rest is discarded until hands come down",
     )
     parser.add_argument("--no-tts", action="store_true")
+    parser.add_argument(
+        "--tts-engine",
+        default="vieneu",
+        choices=["vieneu", "pyttsx3", "system", "none"],
+        help="Bộ phát âm TTS tiếng Việt (mặc định: vieneu)",
+    )
+    parser.add_argument(
+        "--tts-voice",
+        default="Trúc Ly",
+        help="Giọng đọc VieNeu-TTS (mặc định: 'Trúc Ly', ví dụ: 'Mai Anh', 'Minh Quân', 'Phạm Tuyên')",
+    )
+    parser.add_argument(
+        "--record-dir",
+        default=None,
+        help="Thư mục lưu video cử chỉ (mặc định: videos/)",
+    )
+    parser.add_argument(
+        "--no-record",
+        action="store_true",
+        help="Tắt tính năng tự động quay video cử chỉ",
+    )
+    parser.add_argument(
+        "--record-fps",
+        type=float,
+        default=30.0,
+        help="Tốc độ khung hình (FPS) dự phòng cho video quay cử chỉ (mặc định: 30.0)",
+    )
+    parser.add_argument(
+        "--record-mode",
+        default="both",
+        choices=["both", "skeleton", "raw"],
+        help="Chế độ quay video cử chỉ: 'both' (cả bản khung xương & bản gốc), 'skeleton' (chỉ bản khung xương), 'raw' (chỉ bản gốc)",
+    )
     return parser
 
 
@@ -578,9 +626,17 @@ def main() -> None:
     _validate_args(args, parser)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, labels, config = load_checkpoint(Path(args.model), device)
+    model_path = Path(args.model)
+    if not model_path.is_file():
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        if (repo_root / args.model).is_file():
+            model_path = repo_root / args.model
+        elif (Path.cwd() / "VSLR-Project-pipeline-signer-split" / args.model).is_file():
+            model_path = Path.cwd() / "VSLR-Project-pipeline-signer-split" / args.model
+
+    model, labels, config = load_checkpoint(model_path, device)
     try:
-        checkpoint_sha256 = sha256_file(args.model)
+        checkpoint_sha256 = sha256_file(model_path)
         policy = load_reject_policy(
             args.reject_policy or config.get("reject_policy"),
             expected_feature_contract=config.get("feature_contract"),
@@ -601,19 +657,54 @@ def main() -> None:
     print("Controls: Q quit | C clear sentence | S speak now | SPACE force current gesture boundary")
     print("Lower hands between gestures; rejected/unknown segments are never sent to TTS.")
 
-    cap = cv2.VideoCapture(args.camera)
+    cams = list_available_cameras()
+    if cams:
+        print("Cameras phát hiện được trên máy:")
+        for i, cname in enumerate(cams):
+            print(f"  [{i}] {cname}")
+    try:
+        cam_idx, cam_name = resolve_camera(args.camera)
+        print(f"Khởi động camera: [{cam_idx}] {cam_name}")
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+
+    cap = cv2.VideoCapture(cam_idx)
     if not cap.isOpened():
-        raise RuntimeError(f"Cannot open camera {args.camera}")
+        raise RuntimeError(f"Cannot open camera [{cam_idx}] {cam_name}")
+
+    tts_enabled = not args.no_tts and args.tts_engine != "none"
+    tts_mgr = TTSManager(engine=args.tts_engine, voice=args.tts_voice, enabled=tts_enabled)
+
+    recorder = GestureVideoRecorder(
+        record_dir=args.record_dir,
+        fps=args.record_fps,
+        enabled=not args.no_record,
+        record_mode=args.record_mode,
+    )
+    if recorder.enabled:
+        mode_desc = {
+            "both": "cả 2 bản: khung xương & gốc",
+            "skeleton": "chỉ bản khung xương",
+            "raw": "chỉ bản gốc",
+        }.get(recorder.record_mode, recorder.record_mode)
+        print(f"Quay video cử chỉ: BẬT ({mode_desc}) -> Thư mục lưu: {recorder.output_dir}")
+    else:
+        print("Quay video cử chỉ: TẮT (--no-record)")
 
     sentence: list[str] = []
     tracker = SegmentTracker(args.word_gap, args.max_seconds, min_active_seconds=args.min_seconds)
     last_sentence_activity = time.monotonic()
     last_accepted_label: str | None = None
     last_accepted_time: float = 0.0
+    last_saved_info: str | None = None
+    last_saved_time: float = 0.0
 
     def handle_segment(segment: Segment | None) -> None:
-        nonlocal last_sentence_activity, last_accepted_label, last_accepted_time
-        if segment is None or segment.duration < args.min_seconds:
+        nonlocal last_sentence_activity, last_accepted_label, last_accepted_time, last_saved_info, last_saved_time
+        if segment is None:
+            return
+        if segment.duration < args.min_seconds:
+            recorder.cancel_gesture()
             return
         decision = decide_segment(
             model,
@@ -625,6 +716,12 @@ def main() -> None:
             reject_policy=policy,
             allow_uncalibrated=args.allow_uncalibrated,
         )
+        if recorder.enabled:
+            recorder.save_gesture(decision, labels=labels, duration=segment.duration)
+            status_desc = "ACCEPTED" if decision.accepted else "REJECTED"
+            last_saved_info = f"Da luu video: {decision.label} [{status_desc}]"
+            last_saved_time = time.monotonic()
+
         now_seg = time.monotonic()
         if decision.accepted:
             if (
@@ -652,14 +749,16 @@ def main() -> None:
         if not sentence:
             return
         text = " ".join(sentence)
-        if args.no_tts:
+        if args.no_tts or args.tts_engine == "none":
             print(f"SENTENCE> {text}")
         else:
-            speak_text(text)
+            tts_mgr.speak(text)
         sentence.clear()
         last_sentence_activity = now
 
     try:
+        mp_drawing = mp.solutions.drawing_utils
+        mp_holistic = mp.solutions.holistic
         with HolisticExtractor() as extractor:
             while True:
                 ok, frame = cap.read()
@@ -678,24 +777,77 @@ def main() -> None:
                     obs.right_hand_present,
                     gesture_active=gesture_active,
                 )
-                if done is not None and done.forced:
-                    print(
-                        f"Segment hit --max-seconds ({args.max_seconds}); classifying and waiting for resting hands."
-                    )
-                handle_segment(done)
+                # Frame này thuộc cử chỉ nếu đang trong cử chỉ HOẶC cử chỉ vừa kết thúc tại frame này
+                in_gesture = tracker.in_segment or (done is not None)
+                recorder.feed_frame(frame, obs, in_segment=in_gesture, now=now)
+
+                if done is not None:
+                    if done.forced:
+                        print(
+                            f"Segment hit --max-seconds ({args.max_seconds}); classifying and waiting for resting hands."
+                        )
+                    handle_segment(done)
 
                 if sentence and not tracker.in_segment and now - last_sentence_activity >= args.sentence_gap:
                     speak_sentence(now)
 
-                status = "GESTURE" if tracker.in_segment else "IDLE"
-                cv2.putText(frame, f"State: {status}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                # Vẽ landmarks lên màn hình trực tiếp nếu quan sát thấy
+                if getattr(obs, "results", None):
+                    res = obs.results
+                    if hasattr(res, "pose_landmarks") and res.pose_landmarks:
+                        mp_drawing.draw_landmarks(
+                            frame,
+                            res.pose_landmarks,
+                            mp_holistic.POSE_CONNECTIONS,
+                            landmark_drawing_spec=mp_drawing.DrawingSpec(color=(60, 180, 75), thickness=1, circle_radius=1),
+                            connection_drawing_spec=mp_drawing.DrawingSpec(color=(255, 225, 25), thickness=1, circle_radius=1),
+                        )
+                    if hasattr(res, "left_hand_landmarks") and res.left_hand_landmarks:
+                        mp_drawing.draw_landmarks(
+                            frame,
+                            res.left_hand_landmarks,
+                            mp_holistic.HAND_CONNECTIONS,
+                            landmark_drawing_spec=mp_drawing.DrawingSpec(color=(230, 25, 75), thickness=2, circle_radius=2),
+                            connection_drawing_spec=mp_drawing.DrawingSpec(color=(245, 130, 48), thickness=1, circle_radius=1),
+                        )
+                    if hasattr(res, "right_hand_landmarks") and res.right_hand_landmarks:
+                        mp_drawing.draw_landmarks(
+                            frame,
+                            res.right_hand_landmarks,
+                            mp_holistic.HAND_CONNECTIONS,
+                            landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0, 130, 200), thickness=2, circle_radius=2),
+                            connection_drawing_spec=mp_drawing.DrawingSpec(color=(70, 240, 240), thickness=1, circle_radius=1),
+                        )
+
+                # Trạng thái REC / IDLE
+                if tracker.in_segment:
+                    cv2.circle(frame, (25, 25), 8, (0, 0, 255), -1)
+                    cv2.putText(frame, "REC GESTURE", (42, 31), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                else:
+                    cv2.circle(frame, (25, 25), 8, (140, 140, 140), -1)
+                    cv2.putText(frame, "IDLE", (42, 31), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+
+                # Hiển thị câu đang ghép
+                if sentence:
+                    sentence_display = f"Cau: {' '.join(sentence)}"
+                    frame = draw_unicode_text(
+                        frame, sentence_display, (20, 52), font_size=18, color_bgr=(255, 255, 255), bg_color_bgr=(30, 30, 30)
+                    )
+
+                # Hiển thị thông báo lưu video gần nhất (trong 3.5s)
+                if last_saved_info and (now - last_saved_time) < 3.5:
+                    frame = draw_unicode_text(
+                        frame, last_saved_info, (20, 85), font_size=16, color_bgr=(50, 255, 50), bg_color_bgr=(20, 20, 20)
+                    )
+
+                h_f = frame.shape[0]
                 cv2.putText(
                     frame,
                     f"Words: {len(sentence)} | Q quit C clear S speak SPACE boundary",
-                    (20, 70),
+                    (20, h_f - 15),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55,
-                    (255, 255, 255),
+                    0.5,
+                    (220, 220, 220),
                     1,
                 )
                 cv2.imshow("VSL gesture prototype", frame)
@@ -704,6 +856,7 @@ def main() -> None:
                     break
                 if key == ord("c"):
                     tracker.reset()
+                    recorder.cancel_gesture()
                     sentence.clear()
                     last_accepted_label = None
                     last_accepted_time = 0.0
@@ -713,6 +866,8 @@ def main() -> None:
                 elif key == 32:
                     handle_segment(tracker.force_boundary(now))
     finally:
+        recorder.close()
+        tts_mgr.stop()
         cap.release()
         cv2.destroyAllWindows()
 
