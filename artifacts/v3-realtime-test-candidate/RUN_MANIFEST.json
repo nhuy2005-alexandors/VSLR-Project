@@ -1,0 +1,31 @@
+{
+  "run_id": "v3-ship-4signers-24-8clips-13ep-20260916-020145",
+  "created_at_utc": "2026-09-15T19:24:18.756722+00:00",
+  "training_commit": "0dce513c598f7c652c7fe7d033f13dca534e57cc",
+  "branch": "pipeline-signer-split",
+  "mode": "ship",
+  "data_dir": "dataset/recordings_v3_4x24_8",
+  "recording_plan": "dataset/recording_plan_v3_4x24_8.json",
+  "labels_sha256": "4211657fcbf0b24143bd52d936f7a78db13d25673c245dbab8761e3e13136cae",
+  "recording_plan_sha256": "39324af4db00767efe0ea998026104466a2abfdf79bccbe6b277fc50168f9a1d",
+  "dataset_manifest_sha256": "9c299c37e793fffb55932b96b501f047c82a29d0d65a8984f4357c838796fd57",
+  "training_signature": "918588dedeb2e9bdb2dabf8a2f8ac843aa6cf66dc68d61c2e8acb1e4b07a65cf",
+  "checkpoint_sha256": "e7a85bf25eee163ddcfd37a98b1b4b6cc0ec06a4b524d0daced3fe67a89d1fa4",
+  "command_ship": "﻿Ship Training Command:\nvslr-train --data-dir dataset/recordings_v3_4x24_8 --recording-plan dataset/recording_plan_v3_4x24_8.json --labels-file dataset/labels_v2_24.txt --cache-dir dataset/processed/landmark_cache_v3_4x24_8 --epochs 13 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 --model-dir runs\\v3-ship-4signers-24-8clips-13ep-20260916-020145",
+  "corresponding_loso_run": "runs/v3-4signers-24-8clips-20260915-215753",
+  "hyperparameters": {
+    "epochs": 13,
+    "augment": 120,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "seed": 42,
+    "num_workers": 4,
+    "hidden_size": 96,
+    "num_layers": 1,
+    "bidirectional": true,
+    "sequence_length": 60,
+    "feature_dim": 203
+  },
+  "pairing_status": "PAIR_OK",
+  "evaluation_readiness": "READY_FOR_P05_FINAL_REVIEW"
+}

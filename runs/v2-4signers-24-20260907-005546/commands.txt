@@ -1,0 +1,5 @@
+LOSO Command:
+vslr-train --data-dir dataset/recordings_v2_4x24 --recording-plan dataset/recording_plan_v2_4x24.json --labels-file dataset/labels_v2_24.txt --cache-dir dataset/processed/landmark_cache_v2_4x24 --loso --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 --model-dir D:/Dev/Workspaces/VSLR-Workspace/runs/v2-4signers-24-20260907-005546
+
+Ship Command:
+vslr-train --data-dir dataset/recordings_v2_4x24 --recording-plan dataset/recording_plan_v2_4x24.json --labels-file dataset/labels_v2_24.txt --cache-dir dataset/processed/landmark_cache_v2_4x24 --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 --model-dir D:/Dev/Workspaces/VSLR-Workspace/runs/v2-4signers-24-20260907-005546

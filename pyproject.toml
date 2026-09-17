@@ -13,6 +13,7 @@ dependencies = [
   "mediapipe==0.10.21",
   "protobuf>=4.25.3,<5",
   "torch",
+  "matplotlib",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +22,10 @@ tts = ["pyttsx3"]
 [project.scripts]
 vslr-train = "prototype_3_gestures.prepare_train:main"
 vslr-camera = "prototype_3_gestures.realtime:main"
+vslr-check = "prototype_3_gestures.check:main"
+vslr-init-dataset = "prototype_3_gestures.init_dataset:main"
+vslr-sentence = "prototype_3_gestures.sentence:main"
+vslr-eval = "prototype_3_gestures.evaluate:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

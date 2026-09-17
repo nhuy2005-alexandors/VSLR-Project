@@ -1,0 +1,9 @@
+?? dataset/external_test_v1/
+?? dataset/external_test_v2/
+?? scripts/deep_label_search.py
+?? scripts/hunt_clips.py
+?? scripts/inspect_reference_gestures.py
+?? scripts/search_tokyolife.py
+?? scripts/search_vsl_youtube.py
+?? scripts/setup_external_test_v2.py
+?? scripts/targeted_vsl_search.py

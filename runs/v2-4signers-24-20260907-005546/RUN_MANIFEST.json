@@ -1,0 +1,174 @@
+{
+  "run_id": "v2-4signers-24-20260907-005546",
+  "created_at_utc": "2026-09-06T19:14:28.291567+00:00",
+  "training_commit": "d117a951910dcb5508185dc10abef0188dcfbf17",
+  "finalizer_commit": "d117a951910dcb5508185dc10abef0188dcfbf17",
+  "branch": "pipeline-signer-split",
+  "tracked_tree_clean": true,
+  "worktree_clean": false,
+  "untracked_at_start": [
+    "dataset/external_test_v1/",
+    "dataset/external_test_v2/",
+    "scripts/deep_label_search.py",
+    "scripts/hunt_clips.py",
+    "scripts/inspect_reference_gestures.py",
+    "scripts/search_tokyolife.py",
+    "scripts/search_vsl_youtube.py",
+    "scripts/setup_external_test_v2.py",
+    "scripts/targeted_vsl_search.py"
+  ],
+  "data_dir": "dataset/recordings_v2_4x24",
+  "recording_plan": "D:/Dev/Workspaces/VSLR-Workspace/dataset/recording_plan_v2_4x24.json",
+  "labels_sha256": "4211657fcbf0b24143bd52d936f7a78db13d25673c245dbab8761e3e13136cae",
+  "recording_plan_sha256": "790a8ee785242d0a0eeedf029707990b9e1dc5ca7de58bfa2cd2ca84aa819119",
+  "dataset_manifest_sha256": "ac7ceed56893b218713b4337eb281ce9b20fcf8ea0b66600866fb477d6ea6867",
+  "training_signature": "43316055f78bbf2e83c806396d5791d06faeb57b62bef13be17d77095a9c8675",
+  "checkpoint_sha256": "5e202eb9108c06e446da5ae1d27aaebcec7e14cb2e72a9c233c4ac99da245b83",
+  "command_loso": "vslr-train --data-dir dataset/recordings_v2_4x24 --recording-plan dataset/recording_plan_v2_4x24.json --labels-file dataset/labels_v2_24.txt --cache-dir dataset/processed/landmark_cache_v2_4x24 --loso --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 --model-dir D:/Dev/Workspaces/VSLR-Workspace/runs/v2-4signers-24-20260907-005546",
+  "command_ship": "vslr-train --data-dir dataset/recordings_v2_4x24 --recording-plan dataset/recording_plan_v2_4x24.json --labels-file dataset/labels_v2_24.txt --cache-dir dataset/processed/landmark_cache_v2_4x24 --epochs 40 --augment 120 --batch-size 32 --learning-rate 0.001 --seed 42 --num-workers 4 --model-dir D:/Dev/Workspaces/VSLR-Workspace/runs/v2-4signers-24-20260907-005546",
+  "environment": {
+    "python_version": "3.11.9",
+    "torch_version": "2.12.1+cu126",
+    "torch_cuda_build": "12.6",
+    "numpy_version": "1.26.4",
+    "device": "cuda",
+    "gpu_name": "NVIDIA GeForce RTX 4050",
+    "nvidia_driver": "591.66",
+    "cuda_driver_version": "13.1"
+  },
+  "hyperparameters": {
+    "epochs": 40,
+    "augment": 120,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "seed": 42,
+    "num_workers": 4,
+    "hidden_size": 96,
+    "num_layers": 1,
+    "bidirectional": true,
+    "sequence_length": 60,
+    "feature_dim": 203
+  },
+  "evaluation_results": {
+    "macro_mean_accuracy": 0.909722,
+    "pooled_accuracy": 0.909722,
+    "total_clips": 576,
+    "correct_clips": 524,
+    "wrong_clips": 52,
+    "fold_accuracies": {
+      "P01": 0.972222,
+      "P02": 0.930556,
+      "P03": 0.958333,
+      "P04": 0.777778
+    }
+  },
+  "external_review_status": "pending",
+  "provenance_limitations": "The initial dataset manifest generation script was run before being committed to the git repository. Artifact finalization and machine audit scripts were added to verify provenance.",
+  "artifacts": [
+    {
+      "filename": "base-commit.txt",
+      "bytes": 42,
+      "sha256": "0f11c8f11236d8d836d67f2854ca260566dc6df6fc72d6137b523d5127c11866"
+    },
+    {
+      "filename": "branch.txt",
+      "bytes": 23,
+      "sha256": "5784388fa804cd67c265eff64df7ce50d3ea928941b7fbcf08979bfa683564dc"
+    },
+    {
+      "filename": "commands.txt",
+      "bytes": 771,
+      "sha256": "34e25320cdeaf6f75384e8347934ca682bca185385304773071830165c0ce8e8"
+    },
+    {
+      "filename": "confusion_matrix.png",
+      "bytes": 271129,
+      "sha256": "5bd58b384d4d67aac501c64d18021d0d42469b8171d509638ed90029052ded81"
+    },
+    {
+      "filename": "dataset_files_sha256.csv",
+      "bytes": 91809,
+      "sha256": "ac7ceed56893b218713b4337eb281ce9b20fcf8ea0b66600866fb477d6ea6867"
+    },
+    {
+      "filename": "evaluation_report.md",
+      "bytes": 3130,
+      "sha256": "869c2b2fba6f8947625bd003ff7e4bb69c8a16cec92529036fbba9cb91d520fe"
+    },
+    {
+      "filename": "gesture_lstm.pt",
+      "bytes": 987668,
+      "sha256": "5e202eb9108c06e446da5ae1d27aaebcec7e14cb2e72a9c233c4ac99da245b83"
+    },
+    {
+      "filename": "gpu-info.txt",
+      "bytes": 4220,
+      "sha256": "a3cafc04652267504c874e97376def004bdeb2fa71caf4da80ff201e88d53572"
+    },
+    {
+      "filename": "labels.json",
+      "bytes": 590,
+      "sha256": "894bef1a9a4745dcf5c72efc885d1466a90ccd33a614282cd0fc746e9d4eb832"
+    },
+    {
+      "filename": "loso.log",
+      "bytes": 69490,
+      "sha256": "b5f19dc960bea0248798ec6397d76ce436f260ced924ac3925f98a98c9415dd6"
+    },
+    {
+      "filename": "loso_report.json",
+      "bytes": 490683,
+      "sha256": "6bc2f450bf0ad44019a6f7038f173171a160d262f1e95943f8bc09e84196db61"
+    },
+    {
+      "filename": "machine_audit.log",
+      "bytes": 333,
+      "sha256": "611cc8689202dfcaf600d5fac5c452bd16c54ec54fcba57c973948fa45b5196f"
+    },
+    {
+      "filename": "metrics.json",
+      "bytes": 264790,
+      "sha256": "7980b7232d0179eec50679d94e2a9777e407b1dc9b1e4bbba492e70964fe3188"
+    },
+    {
+      "filename": "per_label_accuracy.png",
+      "bytes": 196749,
+      "sha256": "00eed22f7216602b79c90682c7596fe66ddc753023086bac2dcade044b8ddc48"
+    },
+    {
+      "filename": "pip-freeze.txt",
+      "bytes": 5190,
+      "sha256": "cc4cdc71010588c7bad7d13c883767bb18dfc402b8e9f5664eba86145e166094"
+    },
+    {
+      "filename": "python-version.txt",
+      "bytes": 15,
+      "sha256": "1f030e2374c48927a42b38f9777ffd50867049caefe9431e68eda591c97efa31"
+    },
+    {
+      "filename": "REPORT_FOR_AGENT.md",
+      "bytes": 9693,
+      "sha256": "915701bbaa6855570a34441dfe5a8aa083d27725713e734d5fe230964629c147"
+    },
+    {
+      "filename": "ship.log",
+      "bytes": 35632,
+      "sha256": "526377221492110f548a20cba8094e8826e51a7e94c6a308e2f9cebc06345d83"
+    },
+    {
+      "filename": "test.log",
+      "bytes": 482,
+      "sha256": "8eb3dfaa59ab137dfd2ab5a7212b487af17d401c88c524cacf2e8a97ac5b8e6b"
+    },
+    {
+      "filename": "training_curves.png",
+      "bytes": 248769,
+      "sha256": "0e76daf0fc99cb93879e5e208de1e44e5f6ef0d045f8edc5969ea9db56927f7a"
+    },
+    {
+      "filename": "worktree-status.txt",
+      "bytes": 300,
+      "sha256": "6ea73e1d2ec720dab7886580bfbe663d4d17288a532596a273c1c0cfa35a9bb0"
+    }
+  ]
+}

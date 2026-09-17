@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "dataset_version": "recordings_v3_4x24_8",
+  "labels_file": "labels_v2_24.txt",
+  "people": [
+    "P01",
+    "P02",
+    "P03",
+    "P04"
+  ],
+  "clips_per_label": 8
+}

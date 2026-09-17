@@ -1,5 +1,6 @@
 *.npy
 *.mp4
+*.mov
 *.npz
 __pycache__/
 *.py[cod]
@@ -10,4 +11,10 @@ venv/
 
 # Large local data and generated artifacts
 dataset/legacy/
-dataset/processed/*.npz
+dataset/processed/
+dataset/recordings_v1/
+dataset/recordings_v1_p123/
+dataset/recordings_v2_4x24/
+recordings_v1/
+runs/
+models/backups/
