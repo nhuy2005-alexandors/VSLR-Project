@@ -59,6 +59,7 @@ from .realtime import (
     list_available_cameras,
     resolve_camera,
 )
+from .tts import TTSManager
 
 configure_utf8_stdio()
 

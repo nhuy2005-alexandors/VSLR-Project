@@ -1,6 +1,31 @@
-numpy>=1.26,<2
+# =============================================================================
+# VSLR: Vietnamese Sign Language Recognition - Dependencies
+# He thong nhan dien 24 cu chi ngon ngu ky hieu Viet Nam thoi gian thuc
+# =============================================================================
+
+# Core Machine Learning & Computer Vision
+numpy<2,>=1.26.0
 opencv-contrib-python==4.11.0.86
 mediapipe==0.10.21
-protobuf>=4.25.3,<5
-torch
-pyttsx3
+protobuf>=4.25.3,<5.0
+torch>=2.0.0
+
+# Full-stack Web Streaming Server (FastAPI + Uvicorn + SSE)
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+
+# Audio & Text-to-Speech Engine
+sounddevice>=0.4.6
+soundfile>=0.12.1
+pyttsx3>=2.90
+
+# Giong doc Neural Tieng Viet 48kHz (Tu dong fallback sang pyttsx3 neu khong co internet)
+vieneu>=3.8.0
+
+# Utilities & Helpers
+pillow>=10.0.0
+pygrabber>=0.2
+matplotlib>=3.7.0
+scipy>=1.10.0
+requests>=2.28.0
+pytest>=8.0.0

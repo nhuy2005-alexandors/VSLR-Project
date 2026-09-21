@@ -3,24 +3,35 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vslr-three-gestures"
-version = "0.1.0"
-description = "MediaPipe + BiLSTM prototype for three Vietnamese sign gestures"
-requires-python = ">=3.11"
+name = "vslr-vietnamese-sign-language"
+version = "1.0.0"
+description = "Realtime Vietnamese Sign Language Recognition (24 gestures) using MediaPipe and BiLSTM"
+requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.26,<2",
   "opencv-contrib-python==4.11.0.86",
   "mediapipe==0.10.21",
   "protobuf>=4.25.3,<5",
-  "torch",
+  "torch>=2.0.0",
+  "fastapi>=0.100.0",
+  "uvicorn[standard]>=0.20.0",
+  "sounddevice>=0.4.6",
+  "soundfile>=0.12.1",
+  "pyttsx3>=2.90",
+  "matplotlib",
 ]
 
 [project.optional-dependencies]
-tts = ["pyttsx3"]
+vieneu = ["vieneu>=3.8.0"]
 
 [project.scripts]
-vslr-train = "prototype_3_gestures.prepare_train:main"
+vslr-web = "prototype_3_gestures.web_server:main"
 vslr-camera = "prototype_3_gestures.realtime:main"
+vslr-train = "prototype_3_gestures.prepare_train:main"
+vslr-check = "prototype_3_gestures.check:main"
+vslr-init-dataset = "prototype_3_gestures.init_dataset:main"
+vslr-sentence = "prototype_3_gestures.sentence:main"
+vslr-eval = "prototype_3_gestures.evaluate:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
