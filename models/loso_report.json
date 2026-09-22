@@ -1,0 +1,85 @@
+{
+  "mode": "loso",
+  "created_at": "2026-09-15T21:57:53+00:00",
+  "run_id": "v3-4signers-24-8clips-20260915-215753",
+  "labels": [
+    "Bạn có cần giúp đỡ không",
+    "Bạn có vấn đề gì không",
+    "Bạn đang làm gì",
+    "Bạn quê ở đâu",
+    "Bạn tên gì",
+    "Cảm ơn",
+    "Chuyện gì",
+    "Đi đâu",
+    "Được không",
+    "Gọi xe cứu thương",
+    "Hôm nay bạn khỏe không",
+    "Lâu rồi không gặp",
+    "Mấy tuổi",
+    "Như thế nào",
+    "Rất vui được gặp bạn",
+    "Sao thế",
+    "Siêu thị",
+    "Tạm biệt",
+    "Tôi bình thường",
+    "Tôi không khỏe",
+    "Tôi khỏe",
+    "Về nhà cẩn thận",
+    "Xin chào",
+    "Xin lỗi"
+  ],
+  "people": [
+    "P01",
+    "P02",
+    "P03",
+    "P04"
+  ],
+  "clips": 768,
+  "epochs": 13,
+  "summary": {
+    "pooled_accuracy": 0.985677,
+    "macro_mean_accuracy": 0.985677,
+    "top3_accuracy": 0.993490,
+    "total_correct": 757,
+    "total_clips": 768,
+    "folds": {
+      "P01": {
+        "correct": 192,
+        "total": 192,
+        "accuracy": 1.0,
+        "val_loss": 0.0261
+      },
+      "P02": {
+        "correct": 189,
+        "total": 192,
+        "accuracy": 0.984375,
+        "val_loss": 0.1544
+      },
+      "P03": {
+        "correct": 187,
+        "total": 192,
+        "accuracy": 0.973958,
+        "val_loss": 0.1433
+      },
+      "P04": {
+        "correct": 189,
+        "total": 192,
+        "accuracy": 0.984375,
+        "val_loss": 0.1127
+      }
+    }
+  },
+  "external_evaluation_p05": {
+    "total_clips": 48,
+    "raw_top1_accuracy": 1.0,
+    "top3_accuracy": 1.0,
+    "coverage": 1.0,
+    "rejection_rate": 0.0,
+    "accepted_accuracy": 1.0,
+    "confidence_mean": 0.9669,
+    "margin_mean": 0.9615
+  },
+  "checkpoint_sha256": "e7a85bf25eee163ddcfd37a98b1b4b6cc0ec06a4b524d0daced3fe67a89d1fa4",
+  "training_signature": "918588dedeb2e9bdb2dabf8a2f8ac843aa6cf66dc68d61c2e8acb1e4b07a65cf",
+  "note": "Leave-one-signer-out over 4 signers (P01–P04); each fold trains on 3 signers and tests on the held-out signer across 24 gestures (8 clips per pair = 768 clips). 13-epoch frozen candidate. Primary generalization metric: pooled_accuracy = 98.57%, external unseen P05 evaluation = 100.00%."
+}

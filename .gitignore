@@ -1,13 +1,32 @@
-*.npy
-*.mp4
-*.npz
+# Python
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.venv/
-venv/
+*$py.class
+*.so
+.Python
 *.egg-info/
+src/*.egg-info/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
-# Large local data and generated artifacts
-dataset/legacy/
-dataset/processed/*.npz
+# Project generated
+videos/
+recordings/
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
