@@ -56,11 +56,7 @@ Nhằm kiểm định năng lực tổng quát hóa của mô hình đối với
 
 ![Đánh giá Chéo LOSO và Kiểm định Ngoại cảnh P05](figures/01_loso_performance_by_fold.png)
 
-### 4. So sánh Tiến trình Cải tiến Hiệu năng qua các Phiên bản (V1 -> V2 -> V3)
-
-![Tiến trình Phát triển và Bước nhảy Hiệu năng](figures/02_evolution_v1_v2_v3.png)
-
-### 5. Đánh giá trên các Cử chỉ Trọng điểm Lịch sử
+### 4. Đánh giá trên các Cử chỉ Trọng điểm Lịch sử
 Ở các phiên bản trước (V1 và V2), một số cử chỉ có sự biến thiên hình thái ký lớn giữa các người ký dẫn đến nhầm lẫn. Trong bản V3, nhờ tăng cường cỡ mẫu lên 8 clips/cặp và chuẩn hóa vector đặc trưng z group-local, kết quả cải thiện vượt bậc:
 - `Sao thế`: **32 / 32 (100.00%)**
 - `Được không`: **32 / 32 (100.00%)**
@@ -71,11 +67,11 @@ Nhằm kiểm định năng lực tổng quát hóa của mô hình đối với
 
 ![Độ chính xác chi tiết 24 cử chỉ](figures/03_per_gesture_accuracy_v3.png)
 
-### 6. Ma trận Nhầm lẫn Chuẩn hóa (Normalized Confusion Matrix)
+### 5. Ma trận Nhầm lẫn Chuẩn hóa (Normalized Confusion Matrix)
 
 ![Ma trận Nhầm lẫn Chuẩn hóa 24 Cử chỉ](figures/04_confusion_matrix_v3.png)
 
-### 7. Đường cong Học tập & Cơ sở Chọn Dừng tại Epoch 13
+### 6. Đường cong Học tập & Cơ sở Chọn Dừng tại Epoch 13
 
 ![Đường cong Học tập và Cơ sở Chọn Epoch 13](figures/05_convergence_13epochs.png)
 

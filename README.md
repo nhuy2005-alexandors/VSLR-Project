@@ -117,6 +117,4 @@ Hệ thống được kiểm định độ tin cậy thông qua giao thức đá
 
 ![Biểu đồ đánh giá LOSO và P05](docs/reports/figures/01_loso_performance_by_fold.png)
 
-![Tiến trình cải tiến V1 sang V3](docs/reports/figures/02_evolution_v1_v2_v3.png)
-
 - Chi tiết báo cáo ma trận nhầm lẫn, biểu đồ hội tụ và độ chính xác từng lớp được ghi nhận đầy đủ tại [docs/reports/V3_TECHNICAL_EVALUATION_REPORT.md](docs/reports/V3_TECHNICAL_EVALUATION_REPORT.md).
