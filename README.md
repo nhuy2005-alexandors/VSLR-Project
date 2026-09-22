@@ -109,7 +109,14 @@ VSLR-Project/
 
 ---
 
-## 6. Đánh giá Thực nghiệm (LOSO Evaluation)
-Hệ thống được kiểm định độ tin cậy thông qua giao thức đánh giá nghiêm ngặt **Leave-One-Signer-Out (LOSO)** trên 4 người ký khác nhau (`P01`, `P02`, `P03`, `P04`):
-- Đảm bảo mô hình có khả năng tổng quát hóa cao khi gặp người ký hoàn toàn mới (Unseen Signer).
-- Chi tiết báo cáo ma trận nhầm lẫn và độ chính xác từng lớp được ghi nhận đầy đủ trong thư mục `models/loso_report.json` và `docs/reports/`.
+## 6. Đánh giá Thực nghiệm (LOSO & Unseen Signer Evaluation)
+Hệ thống được kiểm định độ tin cậy thông qua giao thức đánh giá nghiêm ngặt **Leave-One-Signer-Out (LOSO)** trên 4 người ký (`P01`, `P02`, `P03`, `P04`) trên 768 clips và kiểm định ngoại cảnh độc lập trên người ký thứ năm (**P05**):
+- **Độ chính xác LOSO (4 Folds gộp)**: **98.57%** (757 / 768 clips đúng).
+- **Top-3 Accuracy**: **99.35%** (763 / 768 clips).
+- **Đánh giá ngoài Unseen Signer P05**: **100.00%** (48 / 48 clips đúng).
+
+![Biểu đồ đánh giá LOSO và P05](docs/reports/figures/01_loso_performance_by_fold.png)
+
+![Tiến trình cải tiến V1 sang V3](docs/reports/figures/02_evolution_v1_v2_v3.png)
+
+- Chi tiết báo cáo ma trận nhầm lẫn, biểu đồ hội tụ và độ chính xác từng lớp được ghi nhận đầy đủ tại [docs/reports/V3_TECHNICAL_EVALUATION_REPORT.md](docs/reports/V3_TECHNICAL_EVALUATION_REPORT.md).
