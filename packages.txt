@@ -2,3 +2,5 @@ libgl1
 libglib2.0-0
 ffmpeg
 libsndfile1
+fonts-dejavu-core
+fonts-liberation

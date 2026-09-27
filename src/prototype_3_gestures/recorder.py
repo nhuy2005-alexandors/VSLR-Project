@@ -63,8 +63,13 @@ class FontManager:
         if size in cls._cached_fonts:
             return cls._cached_fonts[size]
 
+        bundled_font = str(Path(__file__).resolve().parent / "arial.ttf")
         font_candidates = [
+            bundled_font,
             "arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
             "segoeui.ttf",
             "calibri.ttf",
             "tahoma.ttf",
