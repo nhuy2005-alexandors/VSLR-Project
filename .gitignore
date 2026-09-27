@@ -16,6 +16,9 @@ venv.bak/
 videos/
 videos_from_huggingface/
 recordings/
+cloudflared.exe
+*.env
+.env
 *.log
 .pytest_cache/
 .coverage

@@ -53,11 +53,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // =========================================================================
   // 2. APPLICATION STATE & BACKEND ENDPOINT RESOLUTION
   // =========================================================================
+  const urlParams = new URLSearchParams(window.location.search);
+  const queryBackend = urlParams.get('backend');
+  if (queryBackend) {
+    localStorage.setItem('vslr_backend_url', queryBackend.replace(/\/+$/, ''));
+  }
+
   const isLocalHost = (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
-    window.location.hostname.endsWith('.hf.space')
+    window.location.hostname.endsWith('.hf.space') ||
+    window.location.hostname.endsWith('.trycloudflare.com')
   );
+  const isDirectTunnel = window.location.hostname.endsWith('.trycloudflare.com');
+  const isLocalPC = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
   const DEFAULT_REMOTE_BACKEND = 'https://ntbii305-vslr-backend.hf.space';
   const API_BASE = isLocalHost ? '' : (localStorage.getItem('vslr_backend_url') || DEFAULT_REMOTE_BACKEND);
 
@@ -66,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
     dictViewMode: 'cards', // 'cards' | 'videos'
     currentSpeed: 1.0,
     cameraEnabled: false,
-    clientCamMode: !isLocalHost,
+    clientCamMode: !isLocalPC,
     clientStream: null,
     clientFrameTimer: null,
     signerName: localStorage.getItem('vslr_signer_name') || '',
@@ -385,7 +394,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function toggleCameraAction() {
-    if (state.clientCamMode || !isLocalHost) {
+    if (state.clientCamMode || !isLocalPC) {
       if (state.cameraEnabled) {
         stopClientWebcam();
       } else {
@@ -398,11 +407,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function startFrameStreamingLoop() {
     if (state.clientFrameTimer) clearInterval(state.clientFrameTimer);
+    const isFastNetwork = isDirectTunnel || API_BASE.includes('.trycloudflare.com') || isLocalPC;
     if (!frameCanvas) {
       frameCanvas = document.createElement('canvas');
-      frameCanvas.width = 320;
-      frameCanvas.height = 240;
     }
+    frameCanvas.width = isFastNetwork ? 480 : 320;
+    frameCanvas.height = isFastNetwork ? 360 : 240;
     const ctx = frameCanvas.getContext('2d');
     let inFlight = 0;
 
@@ -434,7 +444,10 @@ document.addEventListener('DOMContentLoaded', () => {
       clientWs = null;
     }
 
-    // 2. Vòng lặp truyền frame 320x240 siêu nhẹ (~7KB/frame) đạt 15-20 FPS
+    // 2. Vòng lặp truyền frame: Cloudflare Tunnel chạy 25 FPS (40ms), Hugging Face chạy 16 FPS (60ms)
+    const streamInterval = isFastNetwork ? 40 : 60;
+    const jpegQuality = isFastNetwork ? 0.65 : 0.50;
+
     state.clientFrameTimer = setInterval(() => {
       if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended) return;
       try {
@@ -471,9 +484,9 @@ document.addEventListener('DOMContentLoaded', () => {
           })
           .catch(() => {})
           .finally(() => { inFlight = Math.max(0, inFlight - 1); });
-        }, 'image/jpeg', 0.50);
+        }, 'image/jpeg', jpegQuality);
       } catch (e) {}
-    }, 65);
+    }, streamInterval);
   }
 
   // Phím bấm giao diện

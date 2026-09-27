@@ -18,6 +18,15 @@ def main() -> None:
     parser.add_argument("--sync-secrets", action="store_true", default=False, help="Đồng bộ lại Secrets")
     args = parser.parse_args()
 
+    root_dir = Path(__file__).resolve().parent.parent
+    env_file = root_dir / "vslr.env"
+    if env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
     token = (args.token or os.environ.get("HF_TOKEN") or "").strip()
     if not token:
         print("=" * 68)
@@ -29,7 +38,6 @@ def main() -> None:
         print("[LỖI] Mã Token không hợp lệ! Vui lòng nhập mã bắt đầu bằng 'hf_...'", file=sys.stderr)
         sys.exit(1)
 
-    root_dir = Path(__file__).resolve().parent.parent
     api = HfApi(token=token)
 
     if args.sync_secrets:
