@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=3.0">
+  <link rel="stylesheet" href="styles.css?v=3.5">
 </head>
 <body>
 
@@ -189,12 +189,29 @@
             
             <div class="video-display-area" id="cameraViewport">
               <!-- Backend Live Stream (Ultra fast, native MediaPipe Holistic C++, 0-lag) -->
-              <img id="liveStreamImg" src="/api/video_feed" alt="VSLR Realtime Stream" class="active">
+              <img id="liveStreamImg" src="" alt="VSLR Realtime Stream" style="display:none;">
               <video id="liveVideo" autoplay playsinline muted style="display:none;"></video>
               <canvas id="handLandmarkCanvas" style="display:none;"></canvas>
-              
+
+              <!-- Standby screen when Webcam is OFF -->
+              <div class="cam-standby-screen" id="camStandbyScreen">
+                <div class="standby-webcam-graphic">
+                  <div class="standby-pulse-circle"></div>
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2">
+                    <path d="M23 7l-7 5 7 5V7z"></path>
+                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                    <line x1="2" y1="2" x2="22" y2="22" stroke="#f43f5e" stroke-width="2.2" stroke-linecap="round"></line>
+                  </svg>
+                </div>
+                <h3 class="standby-title">Webcam đang TẮT</h3>
+                <p class="standby-desc">Hệ thống đang ở chế độ chờ. Hãy bật webcam để kết nối camera và bắt đầu nhận diện cử chỉ thời gian thực.</p>
+                <button class="btn-pill-primary btn-start-cam-hero" id="btnHeroStartCam">
+                  ▶ BẬT WEBCAM NHẬN DIỆN (W)
+                </button>
+              </div>
+
               <!-- Rec Indicator Overlay (Matching Terminal Status) -->
-              <div class="rec-status-tag" id="recStatusTag">
+              <div class="rec-status-tag" id="recStatusTag" style="display:none;">
                 <span class="rec-blink"></span>
                 <span id="recStatusText">SẴN SÀNG (SPACE)</span>
               </div>
@@ -213,8 +230,8 @@
 
               <!-- Realtime FPS / Feature HUD -->
               <div class="cam-hud-bar">
-                <span>FPS: <strong id="hudFpsVal">30.0</strong></span>
-                <span>Camera: <strong id="hudCamStatus">HD Webcam</strong></span>
+                <span>FPS: <strong id="hudFpsVal">0.0</strong></span>
+                <span>Camera: <strong id="hudCamStatus">Chờ bật (Tắt)</strong></span>
                 <span>Hands: <strong id="hudHandsStatus">0 tay</strong></span>
                 <span>Model: <strong>BiLSTM (24 cls)</strong></span>
                 <span>Voice: <strong id="hudVoiceStatus">Trúc Ly (48kHz)</strong></span>
@@ -223,6 +240,7 @@
 
             <!-- Cam helper controls (Matching Terminal Options) -->
             <div class="video-sub-controls">
+              <button class="pill-toggle-btn btn-webcam-toggle" id="btnToggleCamera" title="Phím tắt: W">📷 Webcam: TẮT (W)</button>
               <button class="pill-toggle-btn active" id="btnToggleHands" title="Phím tắt: H">Khung xương: BẬT (H)</button>
               <button class="pill-toggle-btn active" id="toggleModeBtn" title="Phím tắt: M">Chế độ: Tự động (M)</button>
             </div>
@@ -270,7 +288,7 @@
                 </svg>
                 Phát âm tiếng Việt (S)
               </button>
-              <span class="hotkey-hint">Phím tắt: <kbd>SPACE</kbd> Ghi/Dừng | <kbd>M</kbd> Chế độ | <kbd>H</kbd> Khung xương | <kbd>S</kbd> Đọc | <kbd>C</kbd> Xóa</span>
+              <span class="hotkey-hint">Phím tắt: <kbd>W</kbd> Webcam | <kbd>SPACE</kbd> Ghi/Dừng | <kbd>M</kbd> Chế độ | <kbd>H</kbd> Khung xương | <kbd>S</kbd> Đọc | <kbd>C</kbd> Xóa</span>
             </div>
 
           </div>
@@ -296,14 +314,24 @@
     <!-- ======================================================== -->
     <section id="view-dictionary" class="page-view">
       <div class="dictionary-container">
-        
+
         <div class="dict-header">
           <div>
             <h2 class="dict-title">Từ điển 24 Cử chỉ Chuẩn hoá (VSLR)</h2>
-            <p class="dict-sub">Bộ nhãn chuẩn NFC thuộc đề tài NCKH tại Đại học Cần Thơ</p>
+            <p class="dict-sub">Bộ nhãn chuẩn NFC thuộc đề tài NCKH tại Đại học Cần Thơ • 24 video hướng dẫn phân bổ đều 4 người ký (P01, P02, P03, P04)</p>
           </div>
-          <div class="dict-search-wrap">
-            <input type="text" id="dictFilterInput" placeholder="Tìm cử chỉ (VD: Xin chào, Cảm ơn...)" aria-label="Tìm cử chỉ">
+          <div class="dict-controls-right">
+            <div class="dict-view-switcher" role="group" aria-label="Chế độ hiển thị">
+              <button class="dict-view-btn active" id="btnViewCards" data-dict-view="cards" title="Hiển thị dạng thẻ gọn gàng">
+                <span>📋 Thẻ từ điển</span>
+              </button>
+              <button class="dict-view-btn" id="btnViewVideos" data-dict-view="videos" title="Hiển thị lưới video hướng dẫn trực tiếp">
+                <span>🎬 Lưới Video</span>
+              </button>
+            </div>
+            <div class="dict-search-wrap">
+              <input type="text" id="dictFilterInput" placeholder="Tìm cử chỉ (VD: Xin chào, Cảm ơn...)" aria-label="Tìm cử chỉ">
+            </div>
           </div>
         </div>
 
@@ -356,28 +384,56 @@
     </div>
   </div>
 
-  <!-- GESTURE DETAIL POPUP -->
+  <!-- GESTURE DETAIL POPUP (WITH HD VIDEO TUTORIAL) -->
   <div class="modal-layer" id="gestureDetailModal">
-    <div class="modal-card">
+    <div class="modal-card modal-card-video">
       <div class="modal-head">
-        <div>
-          <span class="detail-cat-badge" id="detailCatBadge">Giao tiếp</span>
-          <h3 class="modal-head-title" id="detailGestureTitle">Xin chào</h3>
+        <div class="modal-head-info">
+          <div class="detail-badges-row">
+            <span class="detail-cat-badge" id="detailCatBadge">Giao tiếp</span>
+            <span class="detail-signer-badge" id="detailSignerBadge">🎬 Video mẫu chuẩn: Signer P01</span>
+          </div>
+          <div class="detail-title-row">
+            <span class="detail-title-icon" id="detailGestureIcon">👋</span>
+            <h3 class="modal-head-title" id="detailGestureTitle">Xin chào</h3>
+          </div>
         </div>
-        <button class="modal-close" id="closeDetailModal">&times;</button>
+        <button class="modal-close" id="closeDetailModal" title="Đóng (ESC)">&times;</button>
       </div>
-      <div class="modal-body-content">
-        <div class="gesture-icon-showcase" id="detailGestureIcon">👋</div>
+      <div class="modal-body-content modal-video-layout">
+        <!-- Video Player Showcase -->
+        <div class="tutorial-video-column">
+          <div class="tutorial-video-frame">
+            <video id="detailTutorialVideo" playsinline loop muted autoplay controls preload="metadata"></video>
+          </div>
+          <div class="tutorial-video-toolbar">
+            <div class="speed-selector">
+              <span class="speed-lbl">Tốc độ:</span>
+              <button class="speed-btn" data-speed="0.5">0.5x (Chậm)</button>
+              <button class="speed-btn" data-speed="0.75">0.75x</button>
+              <button class="speed-btn active" data-speed="1.0">1.0x (Chuẩn)</button>
+            </div>
+            <button class="replay-btn" id="btnReplayTutorial" title="Phát lại từ đầu">
+              ↺ Xem lại
+            </button>
+          </div>
+        </div>
+
+        <!-- Text Instructions -->
         <div class="detail-text-group">
-          <h4>Hướng dẫn thực hiện:</h4>
-          <p id="detailGestureDesc">Mô tả cử chỉ...</p>
-          <h4>Mẹo theo chuẩn VSLR:</h4>
-          <p id="detailGestureTip">Mẹo kỹ thuật...</p>
+          <div class="detail-info-box">
+            <h4>📖 Hướng dẫn thực hiện:</h4>
+            <p id="detailGestureDesc">Mô tả cử chỉ...</p>
+          </div>
+          <div class="detail-info-box detail-tip-box">
+            <h4>💡 Mẹo theo chuẩn VSLR:</h4>
+            <p id="detailGestureTip">Mẹo kỹ thuật...</p>
+          </div>
         </div>
       </div>
       <div class="modal-foot">
-        <button class="btn-sm btn-subtle" id="btnDetailSpeak">Nghe phát âm</button>
-        <button class="btn-sm btn-primary-blue" id="btnDetailPractice">Thực hành trên Camera</button>
+        <button class="btn-sm btn-voice-outline" id="btnDetailSpeak">🔊 Nghe phát âm (Trúc Ly)</button>
+        <button class="btn-sm btn-primary-blue" id="btnDetailPractice">📷 Thực hành trên Camera</button>
       </div>
     </div>
   </div>
@@ -390,6 +446,6 @@
     </div>
   </footer>
 
-  <script src="app.js?v=3.0"></script>
+  <script src="app.js?v=3.6"></script>
 </body>
 </html>

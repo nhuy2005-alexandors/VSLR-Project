@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -502,7 +503,7 @@ def augment_sequence(sequence: np.ndarray, rng: np.random.Generator) -> np.ndarr
 
 
 class HolisticExtractor:
-    def __init__(self, min_detection_confidence: float = 0.45, min_tracking_confidence: float = 0.45):
+    def __init__(self, min_detection_confidence: float = 0.35, min_tracking_confidence: float = 0.28):
         self._config = dict(
             static_image_mode=False,
             model_complexity=1,
@@ -511,6 +512,14 @@ class HolisticExtractor:
             min_tracking_confidence=min_tracking_confidence,
         )
         self._live = mp.solutions.holistic.Holistic(**self._config)
+        # Bộ nhớ đệm ngắn hạn để giữ điểm ngón tay không bị mất khi vung tay nhanh (motion blur)
+        self._last_left_hand: Any = None
+        self._last_right_hand: Any = None
+        self._last_left_wrist: tuple[float, float, float] | None = None
+        self._last_right_wrist: tuple[float, float, float] | None = None
+        self._left_miss_count: int = 0
+        self._right_miss_count: int = 0
+        self._max_persist_frames: int = 5
 
     def close(self) -> None:
         self._live.close()
@@ -520,6 +529,90 @@ class HolisticExtractor:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+    def _stabilize_realtime_hands(self, results: Any) -> None:
+        """Giữ và tịnh tiến 21 điểm ngón tay theo cổ tay Pose khi bị nhòe chuyển động ngắn hạn."""
+        pose_lms = results.pose_landmarks.landmark if getattr(results, "pose_landmarks", None) else None
+
+        # 1. Bàn tay trái (Pose wrist index = 15)
+        cur_lw: tuple[float, float, float] | None = None
+        lw_active = False
+        if pose_lms and len(pose_lms) > 15:
+            w15 = pose_lms[15]
+            vis = getattr(w15, "visibility", 1.0)
+            if 0.02 < w15.x < 0.98 and 0.02 < w15.y < 0.93 and vis > 0.32:
+                cur_lw = (float(w15.x), float(w15.y), float(w15.z))
+                lw_active = True
+
+        if getattr(results, "left_hand_landmarks", None) is not None:
+            self._last_left_hand = copy.deepcopy(results.left_hand_landmarks)
+            self._last_left_wrist = cur_lw
+            self._left_miss_count = 0
+        elif (
+            self._last_left_hand is not None
+            and self._left_miss_count < self._max_persist_frames
+            and lw_active
+            and cur_lw is not None
+            and self._last_left_wrist is not None
+        ):
+            dx = cur_lw[0] - self._last_left_wrist[0]
+            dy = cur_lw[1] - self._last_left_wrist[1]
+            dz = cur_lw[2] - self._last_left_wrist[2]
+            if abs(dx) < 0.25 and abs(dy) < 0.25:
+                for lm in self._last_left_hand.landmark:
+                    lm.x = float(np.clip(lm.x + dx, 0.0, 1.0))
+                    lm.y = float(np.clip(lm.y + dy, 0.0, 1.0))
+                    lm.z = float(lm.z + dz)
+                self._last_left_wrist = cur_lw
+                self._left_miss_count += 1
+                results.left_hand_landmarks = copy.deepcopy(self._last_left_hand)
+            else:
+                self._last_left_hand = None
+                self._left_miss_count = 0
+        else:
+            self._last_left_hand = None
+            self._last_left_wrist = None
+            self._left_miss_count = 0
+
+        # 2. Bàn tay phải (Pose wrist index = 16)
+        cur_rw: tuple[float, float, float] | None = None
+        rw_active = False
+        if pose_lms and len(pose_lms) > 16:
+            w16 = pose_lms[16]
+            vis = getattr(w16, "visibility", 1.0)
+            if 0.02 < w16.x < 0.98 and 0.02 < w16.y < 0.93 and vis > 0.32:
+                cur_rw = (float(w16.x), float(w16.y), float(w16.z))
+                rw_active = True
+
+        if getattr(results, "right_hand_landmarks", None) is not None:
+            self._last_right_hand = copy.deepcopy(results.right_hand_landmarks)
+            self._last_right_wrist = cur_rw
+            self._right_miss_count = 0
+        elif (
+            self._last_right_hand is not None
+            and self._right_miss_count < self._max_persist_frames
+            and rw_active
+            and cur_rw is not None
+            and self._last_right_wrist is not None
+        ):
+            dx = cur_rw[0] - self._last_right_wrist[0]
+            dy = cur_rw[1] - self._last_right_wrist[1]
+            dz = cur_rw[2] - self._last_right_wrist[2]
+            if abs(dx) < 0.25 and abs(dy) < 0.25:
+                for lm in self._last_right_hand.landmark:
+                    lm.x = float(np.clip(lm.x + dx, 0.0, 1.0))
+                    lm.y = float(np.clip(lm.y + dy, 0.0, 1.0))
+                    lm.z = float(lm.z + dz)
+                self._last_right_wrist = cur_rw
+                self._right_miss_count += 1
+                results.right_hand_landmarks = copy.deepcopy(self._last_right_hand)
+            else:
+                self._last_right_hand = None
+                self._right_miss_count = 0
+        else:
+            self._last_right_hand = None
+            self._last_right_wrist = None
+            self._right_miss_count = 0
 
     def _observe(self, frame_bgr: np.ndarray, holistic) -> FrameObservation:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -535,7 +628,24 @@ class HolisticExtractor:
         )
 
     def process_frame(self, frame_bgr: np.ndarray) -> FrameObservation:
-        return self._observe(frame_bgr, self._live)
+        h, w = frame_bgr.shape[:2]
+        if w > 480:
+            scale_h = int(round(h * 480.0 / w))
+            small = cv2.resize(frame_bgr, (480, scale_h), interpolation=cv2.INTER_LINEAR)
+            rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        else:
+            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        rgb.flags.writeable = False
+        results = self._live.process(rgb)
+        self._stabilize_realtime_hands(results)
+        points, left_present, right_present = _to_landmark_array(results)
+        return FrameObservation(
+            normalize_landmarks(points, left_present, right_present),
+            left_present,
+            right_present,
+            results=results,
+            raw_landmarks=points,
+        )
 
     def extract_video(self, video_path: str | Path, target_len: int = SEQUENCE_LENGTH) -> tuple[np.ndarray, dict]:
         video_path = Path(video_path)

@@ -12,6 +12,7 @@ echo    - Dia chi Web: http://localhost:8000
 echo ====================================================================
 echo.
 cd /d "%~dp0"
+set "PYTHONPATH=%CD%\src;%PYTHONPATH%"
 
 :: Kiem tra moi truong ao venv
 if exist "%CD%\venv\Scripts\python.exe" (
@@ -56,8 +57,8 @@ echo.
 :: Tu dong mo trinh duyet
 start http://localhost:8000
 
-:: Khoi dong server
-"%PY_BIN%" -m prototype_3_gestures.web_server --model "%MODEL_PATH%" --camera 0 --allow-uncalibrated --confidence 0.72 --cooldown 1.5 --tts-voice "Trúc Ly" --record-dir "%RECORD_DIR%" --web-dir "%WEB_DIR%" --port 8000
+:: Khoi dong server (Cac thong so toi uu do nhay tuc thi 0ms)
+"%PY_BIN%" -m prototype_3_gestures.web_server --model "%MODEL_PATH%" --camera 0 --allow-uncalibrated --confidence 0.70 --cooldown 1.0 --word-gap 0.28 --sentence-gap 1.8 --tts-voice "Trúc Ly" --record-dir "%RECORD_DIR%" --web-dir "%WEB_DIR%" --port 8000
 
 echo.
 echo Server da dung.

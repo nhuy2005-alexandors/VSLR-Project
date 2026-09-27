@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -59,9 +60,30 @@ from .realtime import (
     list_available_cameras,
     resolve_camera,
 )
-from .tts import TTSManager
+from .tts import TTSManager, normalize_speech_text
 
 configure_utf8_stdio()
+
+
+def calculate_segment_motion(
+    features_list: list[np.ndarray],
+    left_list: list[bool],
+    right_list: list[bool],
+) -> float:
+    """Tính biên độ dịch chuyển thực sự của các bàn tay đang có mặt (loại bỏ trạng thái đứng yên)."""
+    if len(features_list) < 3:
+        return 0.0
+    arr = np.asarray(features_list, dtype=np.float32)[:, :LANDMARK_FEATURE_DIM].reshape(-1, N_POSE + N_HAND * 2, 3)
+    l_mask = np.asarray(left_list, dtype=bool)
+    r_mask = np.asarray(right_list, dtype=bool)
+    max_motion = 0.0
+    if np.sum(l_mask) >= 2:
+        lh = arr[l_mask, N_POSE : N_POSE + N_HAND, :2]
+        max_motion = max(max_motion, float(np.max(np.ptp(lh, axis=0))))
+    if np.sum(r_mask) >= 2:
+        rh = arr[r_mask, N_POSE + N_HAND :, :2]
+        max_motion = max(max_motion, float(np.max(np.ptp(rh, axis=0))))
+    return max_motion
 
 
 class RealtimeVSLRPipeline:
@@ -71,11 +93,11 @@ class RealtimeVSLRPipeline:
         self,
         model_path: str | Path,
         camera_id: str | int = 0,
-        confidence_threshold: float = 0.72,
-        cooldown: float = 1.5,
-        word_gap: float = 0.45,
-        sentence_gap: float = 2.2,
-        min_seconds: float = 0.35,
+        confidence_threshold: float = 0.70,
+        cooldown: float = 1.0,
+        word_gap: float = 0.28,
+        sentence_gap: float = 1.8,
+        min_seconds: float = 0.18,
         max_seconds: float = 5.0,
         tts_voice: str = "Trúc Ly",
         tts_engine: str = "vieneu",
@@ -123,9 +145,17 @@ class RealtimeVSLRPipeline:
         self.current_camera_name = "Camera 0"
         self.cap: cv2.VideoCapture | None = None
         self.camera_lock = threading.Lock()
+        self.camera_enabled = False
 
         self.running = False
-        self.thread: threading.Thread | None = None
+        self.camera_thread: threading.Thread | None = None
+        self.ai_thread: threading.Thread | None = None
+
+        # Decoupled high-speed pipeline sync primitives
+        self.ai_input_frame: np.ndarray | None = None
+        self.ai_frame_lock = threading.Lock()
+        self.new_ai_frame_event = threading.Event()
+        self.latest_results: Any = None
 
         self.show_hands = True
         self.rec_mode = "auto"  # 'auto' or 'manual'
@@ -155,7 +185,12 @@ class RealtimeVSLRPipeline:
         self.event_subscribers: list[asyncio.Queue] = []
         self.event_loop: asyncio.AbstractEventLoop | None = None
 
-        self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=self.min_seconds)
+        # Bộ lọc chuyển động chống nhận diện nhầm khi người dùng đứng yên
+        self.recent_hand_window: deque = deque(maxlen=6)
+        self.min_gesture_motion: float = 0.50
+
+        # Kích hoạt nhạy sau 0.10s chuyển động (lọc bỏ nhiễu đứng yên 1-2 frame)
+        self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=0.10)
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.event_loop = loop
@@ -175,15 +210,21 @@ class RealtimeVSLRPipeline:
         if self.running:
             return
         self.running = True
-        self._init_camera(self.requested_camera)
-        self.thread = threading.Thread(target=self._worker_loop, daemon=True)
-        self.thread.start()
-        print(f"[Pipeline] Hệ thống AI VSLR & Camera đã khởi động thành công!")
+        self.camera_enabled = False
+        self.camera_thread = threading.Thread(target=self._camera_capture_loop, daemon=True)
+        self.ai_thread = threading.Thread(target=self._ai_worker_loop, daemon=True)
+        self.camera_thread.start()
+        self.ai_thread.start()
+        print(f"[Pipeline] Hệ thống AI VSLR đã sẵn sàng (Kiến trúc Đa luồng Decoupled 30 FPS mượt mà).")
 
     def stop(self) -> None:
         self.running = False
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=2.0)
+        self.camera_enabled = False
+        self.new_ai_frame_event.set()
+        if self.camera_thread and self.camera_thread.is_alive():
+            self.camera_thread.join(timeout=1.0)
+        if self.ai_thread and self.ai_thread.is_alive():
+            self.ai_thread.join(timeout=1.0)
         with self.camera_lock:
             if self.cap and self.cap.isOpened():
                 self.cap.release()
@@ -191,6 +232,51 @@ class RealtimeVSLRPipeline:
         self.recorder.close()
         self.tts_mgr.stop()
         print(f"[Pipeline] Đã dừng toàn bộ pipeline.")
+
+    def start_camera(self) -> bool:
+        if self.camera_enabled and self.cap is not None and self.cap.isOpened():
+            return True
+        ok = self._init_camera(self.requested_camera)
+        if ok:
+            self.camera_enabled = True
+            self.tracker.reset()
+            self.in_segment = False
+            self.hands_count = 0
+            self.broadcast_event({
+                "type": "camera_state",
+                "enabled": True,
+                "index": self.current_camera_idx,
+                "name": self.current_camera_name,
+            })
+            print(f"[Pipeline] Đã BẬT Webcam & Nhận diện: [{self.current_camera_idx}] {self.current_camera_name}")
+            return True
+        else:
+            self.camera_enabled = False
+            self.broadcast_event({
+                "type": "camera_state",
+                "enabled": False,
+                "error": "Không thể kết nối webcam",
+            })
+            return False
+
+    def stop_camera(self) -> None:
+        self.camera_enabled = False
+        self.latest_results = None
+        with self.camera_lock:
+            if self.cap and self.cap.isOpened():
+                self.cap.release()
+                self.cap = None
+        self.in_segment = False
+        self.hands_count = 0
+        self.fps = 0.0
+        self.manual_recording = False
+        self.tracker.reset()
+        self.recorder.cancel_gesture()
+        self.broadcast_event({
+            "type": "camera_state",
+            "enabled": False,
+        })
+        print(f"[Pipeline] Đã TẮT Webcam & Tạm dừng nhận diện.")
 
     def _init_camera(self, camera_spec: str | int) -> bool:
         with self.camera_lock:
@@ -213,6 +299,7 @@ class RealtimeVSLRPipeline:
                 print(f"[Pipeline Error] Không thể mở camera [{self.current_camera_idx}] {self.current_camera_name}!", file=sys.stderr)
                 return False
 
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             self.cap.set(cv2.CAP_PROP_FPS, 30)
@@ -222,7 +309,9 @@ class RealtimeVSLRPipeline:
 
     def switch_camera(self, camera_spec: str | int) -> dict[str, Any]:
         self.requested_camera = camera_spec
-        ok = self._init_camera(camera_spec)
+        ok = False
+        if self.camera_enabled:
+            ok = self._init_camera(camera_spec)
         self.tracker.reset()
         self.broadcast_event({
             "type": "camera_switched",
@@ -238,6 +327,17 @@ class RealtimeVSLRPipeline:
         if segment.duration < self.min_seconds:
             self.recorder.cancel_gesture()
             return
+
+        # Kiểm tra biên độ chuyển động thực sự của bàn tay (chặn đứng yên bị dịch nhầm 'Bạn quê ở đâu')
+        if not self.rec_mode == "manual":
+            seg_motion = calculate_segment_motion(
+                segment.features,
+                segment.left_hand_present,
+                segment.right_hand_present,
+            )
+            if seg_motion < self.min_gesture_motion:
+                self.recorder.cancel_gesture()
+                return
 
         decision = decide_segment(
             self.model,
@@ -373,25 +473,80 @@ class RealtimeVSLRPipeline:
             if seg:
                 self._handle_segment(seg)
 
-    def _worker_loop(self) -> None:
+    def _draw_status_badges(self, display_frame: np.ndarray, now: float) -> np.ndarray:
+        if self.in_segment:
+            cv2.circle(display_frame, (24, 24), 8, (0, 0, 255), -1)
+            cv2.putText(display_frame, "REC GESTURE", (40, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
+        else:
+            cv2.circle(display_frame, (24, 24), 7, (120, 120, 120), -1)
+            cv2.putText(display_frame, "STANDBY", (40, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 200), 2)
+
+        if self.last_saved_info and (now - self.last_saved_time) < 3.0:
+            display_frame = draw_unicode_text(
+                display_frame, self.last_saved_info, (20, 52), font_size=15, color_bgr=(50, 255, 50), bg_color_bgr=(20, 20, 20)
+            )
+        return display_frame
+
+    def _publish_jpeg(self, display_frame: np.ndarray) -> None:
+        _, jpeg_buf = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        with self.frame_lock:
+            self.latest_jpeg = jpeg_buf.tobytes()
+            self.frame_id += 1
+            self.new_frame_event.set()
+
+    def _camera_capture_loop(self) -> None:
+        """Luồng 1: Liên tục rút (drain) frame mới nhất từ phần cứng camera để triệt tiêu độ trễ buffer."""
+        while self.running:
+            if not self.camera_enabled:
+                time.sleep(0.04)
+                continue
+
+            with self.camera_lock:
+                if self.cap is None or not self.cap.isOpened():
+                    time.sleep(0.04)
+                    continue
+                ok, frame = self.cap.read()
+
+            if not ok or frame is None:
+                time.sleep(0.01)
+                continue
+
+            # Đẩy frame mới nhất sang Luồng AI (luôn ghi đè frame mới nhất, không bao giờ ứ đọng)
+            with self.ai_frame_lock:
+                self.ai_input_frame = frame
+            self.new_ai_frame_event.set()
+
+            # Khi TẮT khung xương: Xuất trực tiếp luồng hình thô 30 FPS siêu mượt
+            if not self.show_hands:
+                now = time.monotonic()
+                raw_out = self._draw_status_badges(frame.copy(), now)
+                self._publish_jpeg(raw_out)
+
+            time.sleep(0.004)
+
+    def _ai_worker_loop(self) -> None:
+        """Luồng 2: Xử lý MediaPipe Holistic & Vẽ đồng bộ 100% khung xương lên chính frame đó (0 pixel drift)."""
         mp_drawing = mp.solutions.drawing_utils
         mp_holistic = mp.solutions.holistic
-
+        last_telemetry_time = 0.0
         fps_calc_time = time.monotonic()
         frame_counter = 0
-        last_telemetry_time = 0.0
 
         with HolisticExtractor() as extractor:
             while self.running:
-                with self.camera_lock:
-                    if self.cap is None or not self.cap.isOpened():
-                        time.sleep(0.1)
-                        continue
-                    ok, frame = self.cap.read()
-
-                if not ok:
-                    time.sleep(0.02)
+                if not self.camera_enabled:
+                    time.sleep(0.05)
                     continue
+
+                got = self.new_ai_frame_event.wait(timeout=0.1)
+                if not got:
+                    continue
+                self.new_ai_frame_event.clear()
+
+                with self.ai_frame_lock:
+                    if self.ai_input_frame is None:
+                        continue
+                    frame = self.ai_input_frame.copy()
 
                 now = time.monotonic()
                 frame_counter += 1
@@ -400,21 +555,42 @@ class RealtimeVSLRPipeline:
                     frame_counter = 0
                     fps_calc_time = now
 
-                # 1. Holistic feature extraction
+                # 1. Holistic feature extraction (kèm ổn định ngón tay chống rớt điểm)
                 obs = extractor.process_frame(frame)
+                res = getattr(obs, "results", None)
+                self.latest_results = res
 
                 # 2. Hands presence calculation
                 num_hands = int(obs.left_hand_present) + int(obs.right_hand_present)
                 self.hands_count = num_hands
 
-                # 3. Gesture tracking state machine
-                gesture_active = gesture_activity_from_features(
-                    obs.features, obs.left_hand_present, obs.right_hand_present
+                # 3. Gesture tracking state machine (Kết hợp vị trí cổ tay + vận tốc chuyển động thực sự)
+                if obs.hands_present:
+                    self.recent_hand_window.append((obs.features, obs.left_hand_present, obs.right_hand_present))
+                else:
+                    self.recent_hand_window.clear()
+
+                recent_motion = 0.0
+                if len(self.recent_hand_window) >= 3:
+                    recent_motion = calculate_segment_motion(
+                        [x[0] for x in self.recent_hand_window],
+                        [x[1] for x in self.recent_hand_window],
+                        [x[2] for x in self.recent_hand_window],
+                    )
+
+                wrist_gate = gesture_activity_from_features(
+                    obs.features, obs.left_hand_present, obs.right_hand_present, wrist_above_hip=0.30
+                )
+                # Khi đứng yên (recent_motion < 0.22): giữ nguyên STANDBY, không kích hoạt ghi nhận
+                is_moving = recent_motion >= 0.22
+                gesture_active = bool(
+                    obs.hands_present
+                    and wrist_gate
+                    and (is_moving or (self.in_segment and recent_motion >= 0.14))
                 )
 
                 if self.rec_mode == "manual":
                     if self.manual_recording:
-                        # Ghi nhận cử chỉ thủ công
                         done = self.tracker.feed(
                             True,
                             obs.features,
@@ -423,14 +599,12 @@ class RealtimeVSLRPipeline:
                             obs.right_hand_present,
                             gesture_active=True,
                         )
-                        # Giới hạn tối đa 5s
                         if now - self.manual_rec_start >= self.max_seconds:
                             self.manual_recording = False
                             done = self.tracker.force_boundary(now)
                     else:
                         done = None
                 else:
-                    # Chế độ tự động continuous
                     done = self.tracker.feed(
                         obs.hands_present,
                         obs.features,
@@ -444,6 +618,33 @@ class RealtimeVSLRPipeline:
                 in_gesture = self.in_segment or (done is not None)
                 self.recorder.feed_frame(frame, obs, in_segment=in_gesture, now=now)
 
+                # Dự đoán sớm thời gian thực (Live Preview) chỉ khi thực sự có chuyển động mạnh (>= 0.50)
+                if self.in_segment and done is None and len(self.tracker.segment) >= 10 and (len(self.tracker.segment) % 4 == 0):
+                    try:
+                        live_motion = calculate_segment_motion(
+                            self.tracker.segment,
+                            self.tracker.segment_left,
+                            self.tracker.segment_right,
+                        )
+                        if live_motion >= self.min_gesture_motion:
+                            seg_arr = np.asarray(self.tracker.segment, dtype=np.float32)
+                            prep_live = preprocess_sequence(
+                                seg_arr,
+                                left_hand_present=self.tracker.segment_left,
+                                right_hand_present=self.tracker.segment_right,
+                                timestamps=self.tracker.segment_times if len(self.tracker.segment_times) == len(seg_arr) else None,
+                                target_len=self.seq_len,
+                            )
+                            live_lbl, live_conf, _ = predict_sequence(self.model, prep_live, self.labels, self.device)
+                            if live_conf >= 0.65:
+                                self.broadcast_event({
+                                    "type": "prediction_preview",
+                                    "label": live_lbl,
+                                    "confidence": round(live_conf * 100),
+                                })
+                    except Exception:
+                        pass
+
                 if done is not None:
                     self._handle_segment(done)
 
@@ -456,59 +657,38 @@ class RealtimeVSLRPipeline:
                 ):
                     self.speak_sentence_now()
 
-                # 5. Draw MediaPipe skeleton landmarks directly on frame
-                if self.show_hands and getattr(obs, "results", None):
-                    res = obs.results
-                    # Pose (loại bỏ hoàn toàn các điểm trên khuôn mặt 0-10)
-                    if hasattr(res, "pose_landmarks") and res.pose_landmarks:
-                        draw_body_pose_landmarks(
-                            frame,
-                            res.pose_landmarks,
-                            point_color=(60, 180, 75),
-                            line_color=(255, 225, 25),
-                            thickness=1,
-                            circle_radius=1,
-                        )
-                    # Left Hand (Vivid Magenta / Orange)
-                    if hasattr(res, "left_hand_landmarks") and res.left_hand_landmarks:
-                        mp_drawing.draw_landmarks(
-                            frame,
-                            res.left_hand_landmarks,
-                            mp_holistic.HAND_CONNECTIONS,
-                            landmark_drawing_spec=mp_drawing.DrawingSpec(color=(230, 25, 75), thickness=2, circle_radius=2),
-                            connection_drawing_spec=mp_drawing.DrawingSpec(color=(245, 130, 48), thickness=2, circle_radius=1),
-                        )
-                    # Right Hand (Vivid Blue / Cyan)
-                    if hasattr(res, "right_hand_landmarks") and res.right_hand_landmarks:
-                        mp_drawing.draw_landmarks(
-                            frame,
-                            res.right_hand_landmarks,
-                            mp_holistic.HAND_CONNECTIONS,
-                            landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0, 130, 200), thickness=2, circle_radius=2),
-                            connection_drawing_spec=mp_drawing.DrawingSpec(color=(70, 240, 240), thickness=2, circle_radius=1),
-                        )
+                # 5. Khi BẬT khung xương: Vẽ trực tiếp lên CHÍNH frame vừa phân tích để khớp 100% vị trí bàn tay
+                if self.show_hands:
+                    if res is not None:
+                        if hasattr(res, "pose_landmarks") and res.pose_landmarks:
+                            draw_body_pose_landmarks(
+                                frame,
+                                res.pose_landmarks,
+                                point_color=(60, 180, 75),
+                                line_color=(255, 225, 25),
+                                thickness=1,
+                                circle_radius=1,
+                            )
+                        if hasattr(res, "left_hand_landmarks") and res.left_hand_landmarks:
+                            mp_drawing.draw_landmarks(
+                                frame,
+                                res.left_hand_landmarks,
+                                mp_holistic.HAND_CONNECTIONS,
+                                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(230, 25, 75), thickness=2, circle_radius=2),
+                                connection_drawing_spec=mp_drawing.DrawingSpec(color=(245, 130, 48), thickness=2, circle_radius=1),
+                            )
+                        if hasattr(res, "right_hand_landmarks") and res.right_hand_landmarks:
+                            mp_drawing.draw_landmarks(
+                                frame,
+                                res.right_hand_landmarks,
+                                mp_holistic.HAND_CONNECTIONS,
+                                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0, 130, 200), thickness=2, circle_radius=2),
+                                connection_drawing_spec=mp_drawing.DrawingSpec(color=(70, 240, 240), thickness=2, circle_radius=1),
+                            )
+                    frame = self._draw_status_badges(frame, now)
+                    self._publish_jpeg(frame)
 
-                # Draw minimal video badges (REC status & Last save info)
-                if self.in_segment:
-                    cv2.circle(frame, (24, 24), 8, (0, 0, 255), -1)
-                    cv2.putText(frame, "REC GESTURE", (40, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-                else:
-                    cv2.circle(frame, (24, 24), 7, (120, 120, 120), -1)
-                    cv2.putText(frame, "STANDBY", (40, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 200), 2)
-
-                if self.last_saved_info and (now - self.last_saved_time) < 3.0:
-                    frame = draw_unicode_text(
-                        frame, self.last_saved_info, (20, 52), font_size=15, color_bgr=(50, 255, 50), bg_color_bgr=(20, 20, 20)
-                    )
-
-                # 6. Encode JPEG for high-speed streaming (Quality 75 for ultra low-latency)
-                _, jpeg_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                with self.frame_lock:
-                    self.latest_jpeg = jpeg_buf.tobytes()
-                    self.frame_id += 1
-                    self.new_frame_event.set()
-
-                # 7. Telemetry push (every 250ms)
+                # 6. Telemetry push (every 250ms)
                 if now - last_telemetry_time >= 0.25:
                     last_telemetry_time = now
                     elapsed_rec = round(now - self.manual_rec_start, 1) if self.manual_recording else 0.0
@@ -516,14 +696,13 @@ class RealtimeVSLRPipeline:
                         "type": "telemetry",
                         "fps": round(self.fps, 1),
                         "camera": f"[{self.current_camera_idx}] {self.current_camera_name}",
+                        "camera_enabled": self.camera_enabled,
                         "hands_count": self.hands_count,
                         "in_segment": self.in_segment,
                         "rec_mode": self.rec_mode,
                         "rec_elapsed": elapsed_rec,
                         "sentence": list(self.sentence),
                     })
-
-                time.sleep(0.005)
 
 
 def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
@@ -565,6 +744,9 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
         async def frame_generator():
             last_sent_id = -1
             while pipeline.running:
+                if not pipeline.camera_enabled:
+                    await asyncio.sleep(0.08)
+                    continue
                 frame_bytes = None
                 current_id = -1
                 with pipeline.frame_lock:
@@ -578,8 +760,8 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
                     )
-                # Chờ ngắn 10ms để nhường CPU, kiểm tra frame tiếp theo
-                await asyncio.sleep(0.010)
+                # Nhịp độ kiểm tra frame tối ưu ~35-40 FPS, nhường CPU cho event loop
+                await asyncio.sleep(0.025)
 
         return StreamingResponse(
             frame_generator(),
@@ -598,6 +780,7 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
                 init_data = json.dumps({
                     "type": "init",
                     "camera": f"[{pipeline.current_camera_idx}] {pipeline.current_camera_name}",
+                    "camera_enabled": pipeline.camera_enabled,
                     "rec_mode": pipeline.rec_mode,
                     "show_hands": pipeline.show_hands,
                     "sentence": list(pipeline.sentence),
@@ -623,11 +806,26 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # 3. Action API (Space, Clear, Speak, Toggle Hands, Toggle Mode)
+    # 3. Action API (Space, Clear, Speak, Toggle Hands, Toggle Mode, Start/Stop Camera)
     @app.post("/api/action")
     async def trigger_action(action: str = Query(...)):
         cmd = action.lower().strip()
-        if cmd == "space":
+        if cmd == "start_camera":
+            ok = pipeline.start_camera()
+            return {"status": "ok", "action": "start_camera", "camera_enabled": ok}
+        elif cmd == "stop_camera":
+            pipeline.stop_camera()
+            return {"status": "ok", "action": "stop_camera", "camera_enabled": False}
+        elif cmd == "toggle_camera":
+            if pipeline.camera_enabled:
+                pipeline.stop_camera()
+            else:
+                pipeline.start_camera()
+            return {"status": "ok", "action": "toggle_camera", "camera_enabled": pipeline.camera_enabled}
+        elif cmd == "space":
+            if not pipeline.camera_enabled:
+                pipeline.start_camera()
+                return {"status": "ok", "action": "start_camera", "camera_enabled": pipeline.camera_enabled}
             pipeline.trigger_space()
             return {"status": "ok", "action": "space"}
         elif cmd == "clear":
@@ -663,7 +861,18 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
             "cameras": cams,
             "current_index": pipeline.current_camera_idx,
             "current_name": pipeline.current_camera_name,
+            "camera_enabled": pipeline.camera_enabled,
         }
+
+    @app.post("/api/camera/start")
+    async def start_camera_api():
+        ok = pipeline.start_camera()
+        return {"success": ok, "camera_enabled": ok, "name": pipeline.current_camera_name}
+
+    @app.post("/api/camera/stop")
+    async def stop_camera_api():
+        pipeline.stop_camera()
+        return {"success": True, "camera_enabled": False}
 
     @app.post("/api/camera/select")
     async def select_camera(camera: str = Query(...)):
@@ -673,21 +882,29 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
     # 5. VieNeu-TTS Speech Synthesis API
     @app.get("/api/tts")
     async def tts_speak(text: str = Query(...), voice: str = Query("Trúc Ly"), play_server: bool = Query(True)):
-        normalized = text.strip()
+        normalized = normalize_speech_text(text.strip())
         if not normalized:
             raise HTTPException(status_code=400, detail="Văn bản không được để trống")
 
-        # 1. Phát trên loa máy tính nếu yêu cầu (giống batch camera)
+        # 1. Phát trên loa máy tính nếu yêu cầu: phát xong phản hồi JSON, KHÔNG gửi thêm file âm thanh để tránh echo
         if play_server:
             pipeline.tts_mgr.voice = voice
             pipeline.tts_mgr.speak(normalized)
+            return JSONResponse({"status": "played_on_server", "text": normalized, "voice": voice})
 
-        # 2. Sinh dữ liệu WAV trả về trình duyệt
+        # 2. Sinh dữ liệu WAV trả về trình duyệt (khi client muốn tự phát qua loa trình duyệt / thiết bị di động)
         try:
             from vieneu import Vieneu
             engine = pipeline.tts_mgr._get_vieneu()
             if engine is not None:
-                audio = engine.infer(normalized, voice=voice)
+                audio = engine.infer(
+                    normalized,
+                    voice=voice,
+                    temperature=pipeline.tts_mgr.temperature,
+                    top_p=pipeline.tts_mgr.top_p,
+                    top_k=pipeline.tts_mgr.top_k,
+                    repetition_penalty=pipeline.tts_mgr.repetition_penalty,
+                )
                 sr = getattr(engine, "sample_rate", 48000)
                 audio_arr = np.asarray(audio, dtype=np.float32)
 
@@ -712,6 +929,7 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
             "fps": round(pipeline.fps, 1),
             "camera": pipeline.current_camera_name,
             "camera_index": pipeline.current_camera_idx,
+            "camera_enabled": pipeline.camera_enabled,
             "in_segment": pipeline.in_segment,
             "rec_mode": pipeline.rec_mode,
             "hands_count": pipeline.hands_count,
@@ -742,10 +960,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="VSLR Web Realtime Studio Server")
     parser.add_argument("--model", default="artifacts/v3-realtime-test-candidate/gesture_lstm.pt")
     parser.add_argument("--camera", default="0", help="Camera index (0, 1) hoặc tên (ví dụ: 'A16')")
-    parser.add_argument("--confidence", type=float, default=0.72)
-    parser.add_argument("--cooldown", type=float, default=1.5)
-    parser.add_argument("--word-gap", type=float, default=0.45)
-    parser.add_argument("--sentence-gap", type=float, default=2.2)
+    parser.add_argument("--confidence", type=float, default=0.70)
+    parser.add_argument("--cooldown", type=float, default=1.0)
+    parser.add_argument("--word-gap", type=float, default=0.28)
+    parser.add_argument("--sentence-gap", type=float, default=1.8)
     parser.add_argument("--tts-voice", default="Trúc Ly")
     parser.add_argument("--tts-engine", default="vieneu")
     parser.add_argument("--record-dir", default=None)

@@ -39,13 +39,25 @@ document.addEventListener('DOMContentLoaded', () => {
     { id: 'nhu_the_nao', name: 'Như thế nào', cat: 'Tương tác', icon: '🤔', desc: 'Hai bàn tay úp xuống, sau đó lật ngửa lên đồng thời hai bên với nét mặt thắc mắc.', tip: 'Động tác lật bàn tay (Hand Flip) là mốc đặc trưng.' },
     { id: 'sao_the', name: 'Sao thế', cat: 'Tương tác', icon: '🤷', desc: 'Hai bàn tay mở rộng ngửa trước ngực, hơi nhún nhẹ vai và lắc cổ tay hỏi lý do.', tip: 'Tránh tạo hình tay chữ OK để không bị phân loại sai.' },
     { id: 'chuyen_gi', name: 'Chuyện gì', cat: 'Tương tác', icon: '💬', desc: 'Đưa hai ngón trỏ chỉ vào nhau rồi gõ nhẹ hai lần trước ngực kết hợp ngửa bàn tay hỏi.', tip: 'Chuyển động dứt khoát, không vung tay quá rộng.' }
-  ];
+  ].map((item, idx) => {
+    const signers = ['P01', 'P02', 'P03', 'P04'];
+    const signer = signers[idx % 4];
+    return {
+      ...item,
+      signer,
+      video: `tutorials/${item.id}.mp4?v=3.2`,
+      thumb: `tutorials/${item.id}.jpg?v=3.2`
+    };
+  });
 
   // =========================================================================
   // 2. APPLICATION STATE
   // =========================================================================
   const state = {
     activeView: 'view-home',
+    dictViewMode: 'cards', // 'cards' | 'videos'
+    currentSpeed: 1.0,
+    cameraEnabled: false,
     sentence: [],
     recMode: 'auto',       // 'auto' | 'manual'
     showHands: true,
@@ -64,6 +76,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnMainToggleTranslate = document.getElementById('btnMainToggleTranslate');
   const sentenceWordsBox = document.getElementById('sentenceWordsBox');
   const liveStreamImg = document.getElementById('liveStreamImg');
+  const camStandbyScreen = document.getElementById('camStandbyScreen');
+  const btnHeroStartCam = document.getElementById('btnHeroStartCam');
+  const btnToggleCamera = document.getElementById('btnToggleCamera');
   const camPrompt = document.getElementById('camPrompt');
   const btnStartRealCam = document.getElementById('btnStartRealCam');
   const btnToggleHands = document.getElementById('btnToggleHands');
@@ -96,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
     if (viewId === 'view-translate') {
-      ensureLiveStreamRunning();
+      updateCameraStateUI();
     }
   }
 
@@ -125,20 +140,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!text || !text.trim()) return;
     const cleanText = text.trim();
 
-    // 1. Gọi API VieNeu-TTS backend (phát trực tiếp ra loa máy tính & trả về file âm thanh)
+    // 1. Gọi API VieNeu-TTS backend (phát trực tiếp ra loa máy tính; chỉ phát trên trình duyệt nếu server trả về WAV)
     fetch(`/api/tts?text=${encodeURIComponent(cleanText)}&voice=${encodeURIComponent(state.ttsVoice)}&play_server=true`)
       .then(res => {
-        if (res.headers.get("content-type")?.includes("audio/wav")) {
-          return res.blob();
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("audio/wav")) {
+          return res.blob().then(blob => {
+            if (blob) {
+              const audioUrl = URL.createObjectURL(blob);
+              const audio = new Audio(audioUrl);
+              audio.play().catch(() => {});
+            }
+          });
         }
-        return null;
-      })
-      .then(blob => {
-        if (blob) {
-          const audioUrl = URL.createObjectURL(blob);
-          const audio = new Audio(audioUrl);
-          audio.play().catch(() => {});
-        }
+        return res.json().catch(() => null);
       })
       .catch(() => {
         // Dự phòng: Nếu server ngắt kết nối thì dùng tạm SpeechSynthesis trình duyệt
@@ -170,8 +185,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const isTheater = translationDualBox.classList.toggle('theater-mode');
     if (btnToggleTheater) {
       btnToggleTheater.classList.toggle('active', isTheater);
-      btnToggleTheater.innerHTML = isTheater 
-        ? '<span class="theater-icon">🗗</span> Thu nhỏ (T)' 
+      btnToggleTheater.innerHTML = isTheater
+        ? '<span class="theater-icon">🗗</span> Thu nhỏ (T)'
         : '<span class="theater-icon">⛶</span> Rạp chiếu (T)';
     }
   }
@@ -179,7 +194,17 @@ document.addEventListener('DOMContentLoaded', () => {
   btnToggleTheater?.addEventListener('click', toggleTheaterMode);
 
   // Phím bấm giao diện
-  btnMainToggleTranslate?.addEventListener('click', () => triggerBackendAction('space'));
+  btnHeroStartCam?.addEventListener('click', () => triggerBackendAction('start_camera'));
+  btnToggleCamera?.addEventListener('click', () => triggerBackendAction('toggle_camera'));
+
+  btnMainToggleTranslate?.addEventListener('click', () => {
+    if (!state.cameraEnabled) {
+      triggerBackendAction('start_camera');
+    } else {
+      triggerBackendAction('space');
+    }
+  });
+
   document.getElementById('btnClearSentence')?.addEventListener('click', () => triggerBackendAction('clear'));
   document.getElementById('btnSpeakSentence')?.addEventListener('click', () => triggerBackendAction('speak'));
   btnToggleHands?.addEventListener('click', () => triggerBackendAction('toggle_hands'));
@@ -189,12 +214,35 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-    if (e.code === 'Space') {
+    // Nếu đang mở popup chi tiết video hướng dẫn
+    const isModalOpen = gestureDetailModal && gestureDetailModal.classList.contains('open');
+    if (isModalOpen) {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (detailTutorialVideo) {
+          if (detailTutorialVideo.paused) {
+            detailTutorialVideo.play().catch(() => {});
+          } else {
+            detailTutorialVideo.pause();
+          }
+        }
+        return;
+      }
+    }
+
+    if (e.key === 'w' || e.key === 'W') {
+      e.preventDefault();
+      triggerBackendAction('toggle_camera');
+    } else if (e.code === 'Space') {
       e.preventDefault();
       if (state.activeView !== 'view-translate') {
         navigateToView('view-translate');
       }
-      triggerBackendAction('space');
+      if (!state.cameraEnabled) {
+        triggerBackendAction('start_camera');
+      } else {
+        triggerBackendAction('space');
+      }
     } else if (e.key === 't' || e.key === 'T') {
       e.preventDefault();
       toggleTheaterMode();
@@ -251,18 +299,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
     switch (data.type) {
       case 'init':
+        state.cameraEnabled = !!data.camera_enabled;
         state.recMode = data.rec_mode || 'auto';
         state.showHands = !!data.show_hands;
         state.ttsVoice = data.tts_voice || 'Trúc Ly';
         state.sentence = data.sentence || [];
+        updateCameraStateUI();
         updateModeUI();
         updateHandsUI();
         renderSentence();
         if (hudVoiceStatus) hudVoiceStatus.textContent = `${state.ttsVoice} (48kHz)`;
-        if (hudCamStatus && data.camera) hudCamStatus.textContent = data.camera;
+        if (hudCamStatus && data.camera && state.cameraEnabled) hudCamStatus.textContent = data.camera;
+        break;
+
+      case 'camera_state':
+        state.cameraEnabled = !!data.enabled;
+        updateCameraStateUI();
+        if (state.cameraEnabled && data.name && hudCamStatus) {
+          hudCamStatus.textContent = `[${data.index}] ${data.name}`;
+        }
         break;
 
       case 'telemetry':
+        if (typeof data.camera_enabled !== 'undefined' && state.cameraEnabled !== data.camera_enabled) {
+          state.cameraEnabled = data.camera_enabled;
+          updateCameraStateUI();
+        }
+        if (!state.cameraEnabled) break;
+
         if (hudFpsVal) hudFpsVal.textContent = data.fps ? data.fps.toFixed(1) : '30.0';
         if (hudCamStatus && data.camera) hudCamStatus.textContent = data.camera;
         if (hudHandsStatus) {
@@ -274,8 +338,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.in_segment) {
           recStatusTag?.classList.add('active');
           if (recStatusText) {
-            recStatusText.textContent = data.rec_mode === 'manual' 
-              ? `ĐANG GHI: ${data.rec_elapsed}s` 
+            recStatusText.textContent = data.rec_mode === 'manual'
+              ? `ĐANG GHI: ${data.rec_elapsed}s`
               : 'ĐANG GHI CỬ CHỈ...';
           }
           if (btnMainToggleTranslate) {
@@ -285,8 +349,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           recStatusTag?.classList.remove('active');
           if (recStatusText) {
-            recStatusText.textContent = data.rec_mode === 'manual' 
-              ? 'SẴN SÀNG (SPACE)' 
+            recStatusText.textContent = data.rec_mode === 'manual'
+              ? 'SẴN SÀNG (SPACE)'
               : 'TỰ ĐỘNG (Continuous)';
           }
           if (btnMainToggleTranslate) {
@@ -296,10 +360,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         break;
 
+      case 'prediction_preview':
+        if (heroPredictedWord) {
+          heroPredictedWord.textContent = data.label;
+          heroPredictedWord.style.opacity = '0.85';
+        }
+        if (predConfVal) {
+          predConfVal.textContent = `${data.confidence}% (Đang nhận diện...)`;
+        }
+        if (recStatusText) {
+          recStatusText.textContent = `ĐANG NHẬN DIỆN: ${data.label} (${data.confidence}%)`;
+        }
+        break;
+
       case 'prediction':
         if (data.accepted) {
           // Hiển thị chữ dự đoán lớn kèm hiệu ứng pop
           if (heroPredictedWord) {
+            heroPredictedWord.style.opacity = '1.0';
             heroPredictedWord.textContent = data.label;
             heroPredictedWord.classList.add('pop');
             setTimeout(() => heroPredictedWord.classList.remove('pop'), 250);
@@ -415,9 +493,59 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // =========================================================================
-  // 7. CAMERA STREAM
+  // 7. CAMERA STREAM & ON-DEMAND WEBCAM CONTROL
   // =========================================================================
+  function updateCameraStateUI() {
+    if (state.cameraEnabled) {
+      camStandbyScreen?.classList.add('hidden');
+      camPrompt?.classList.add('hidden');
+      if (liveStreamImg) {
+        liveStreamImg.classList.remove('hidden');
+        liveStreamImg.style.display = 'block';
+        const curSrc = liveStreamImg.getAttribute('src') || '';
+        if (!curSrc.includes('/api/video_feed')) {
+          liveStreamImg.src = '/api/video_feed?t=' + Date.now();
+        }
+      }
+      if (recStatusTag) recStatusTag.style.display = 'flex';
+      if (btnToggleCamera) {
+        btnToggleCamera.classList.add('active');
+        btnToggleCamera.textContent = '📷 Webcam: BẬT (W)';
+      }
+      if (btnMainToggleTranslate && !btnMainToggleTranslate.classList.contains('stopping')) {
+        btnMainToggleTranslate.textContent = '[> BẮT ĐẦU GHI (SPACE)]';
+      }
+    } else {
+      camStandbyScreen?.classList.remove('hidden');
+      camPrompt?.classList.add('hidden');
+      if (liveStreamImg) {
+        liveStreamImg.removeAttribute('src');
+        liveStreamImg.classList.add('hidden');
+        liveStreamImg.style.display = 'none';
+      }
+      if (recStatusTag) {
+        recStatusTag.classList.remove('active');
+        recStatusTag.style.display = 'none';
+      }
+      if (hudFpsVal) hudFpsVal.textContent = '0.0';
+      if (hudCamStatus) hudCamStatus.textContent = 'Chờ bật (Tắt)';
+      if (hudHandsStatus) {
+        hudHandsStatus.textContent = '0 tay';
+        hudHandsStatus.style.color = '#94a3b8';
+      }
+      if (btnToggleCamera) {
+        btnToggleCamera.classList.remove('active');
+        btnToggleCamera.textContent = '📷 Webcam: TẮT (W)';
+      }
+      if (btnMainToggleTranslate) {
+        btnMainToggleTranslate.classList.remove('stopping');
+        btnMainToggleTranslate.textContent = '[▶ BẬT WEBCAM NHẬN DIỆN (W)]';
+      }
+    }
+  }
+
   function ensureLiveStreamRunning() {
+    if (!state.cameraEnabled) return;
     if (liveStreamImg) {
       liveStreamImg.src = '/api/video_feed?t=' + Date.now();
       camPrompt?.classList.add('hidden');
@@ -425,41 +553,72 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   btnStartRealCam?.addEventListener('click', () => {
-    ensureLiveStreamRunning();
+    triggerBackendAction('start_camera');
   });
 
-  // Handle stream reload if image errors
+  // Handle stream reload if image errors while camera is enabled
   liveStreamImg?.addEventListener('error', () => {
+    if (!state.cameraEnabled) return;
     camPrompt?.classList.remove('hidden');
     setTimeout(ensureLiveStreamRunning, 2000);
   });
 
   // =========================================================================
-  // 8. DICTIONARY RENDERING & SEARCH (24 Gestures)
+  // 8. DICTIONARY RENDERING & SEARCH (24 Gestures + Video Tutorials P01..P04)
   // =========================================================================
   const dictGridContainer = document.getElementById('dictGridContainer');
   const dictFilterInput = document.getElementById('dictFilterInput');
+  const btnViewCards = document.getElementById('btnViewCards');
+  const btnViewVideos = document.getElementById('btnViewVideos');
 
   function renderDictionary(filter = '') {
     if (!dictGridContainer) return;
 
-    const filtered = GESTURE_DATA.filter(g => 
-      g.name.toLowerCase().includes(filter.toLowerCase()) ||
-      g.cat.toLowerCase().includes(filter.toLowerCase())
+    const q = filter.toLowerCase();
+    const filtered = GESTURE_DATA.filter(g =>
+      g.name.toLowerCase().includes(q) ||
+      g.cat.toLowerCase().includes(q) ||
+      g.signer.toLowerCase().includes(q)
     );
 
-    dictGridContainer.innerHTML = filtered.map(g => `
-      <div class="dict-card" data-gesture-id="${g.id}">
-        <div class="dict-card-left">
-          <span class="dict-icon">${g.icon}</span>
-          <div>
-            <div class="dict-name">${g.name}</div>
-            <div class="dict-cat">${g.cat}</div>
+    if (state.dictViewMode === 'videos') {
+      dictGridContainer.className = 'dict-grid mode-videos';
+      dictGridContainer.innerHTML = filtered.map(g => `
+        <div class="dict-video-card" data-gesture-id="${g.id}">
+          <div class="dict-video-thumb-wrap">
+            <img src="${g.thumb}" alt="${g.name}" loading="lazy" class="dict-video-thumb">
+            <div class="dict-video-play-overlay">
+              <span class="play-icon-circle">▶</span>
+            </div>
+            <span class="dict-video-duration">Signer ${g.signer}</span>
+          </div>
+          <div class="dict-video-info">
+            <div class="dict-video-title">${g.icon} ${g.name}</div>
+            <div class="dict-video-meta">
+              <span class="dict-cat-tag">${g.cat} • ${g.signer}</span>
+              <span class="dict-view-action">Xem hướng dẫn →</span>
+            </div>
           </div>
         </div>
-        <span class="dict-arrow">→</span>
-      </div>
-    `).join('');
+      `).join('');
+    } else {
+      dictGridContainer.className = 'dict-grid mode-cards';
+      dictGridContainer.innerHTML = filtered.map(g => `
+        <div class="dict-card" data-gesture-id="${g.id}">
+          <div class="dict-card-left">
+            <span class="dict-icon">${g.icon}</span>
+            <div>
+              <div class="dict-name">${g.name}</div>
+              <div class="dict-cat">${g.cat}</div>
+            </div>
+          </div>
+          <div class="dict-card-right">
+            <span class="dict-video-pill">▶ ${g.signer}</span>
+            <span class="dict-arrow">→</span>
+          </div>
+        </div>
+      `).join('');
+    }
   }
 
   renderDictionary();
@@ -468,11 +627,28 @@ document.addEventListener('DOMContentLoaded', () => {
     renderDictionary(e.target.value.trim());
   });
 
+  btnViewCards?.addEventListener('click', () => {
+    state.dictViewMode = 'cards';
+    btnViewCards.classList.add('active');
+    btnViewVideos?.classList.remove('active');
+    renderDictionary(dictFilterInput ? dictFilterInput.value.trim() : '');
+  });
+
+  btnViewVideos?.addEventListener('click', () => {
+    state.dictViewMode = 'videos';
+    btnViewVideos.classList.add('active');
+    btnViewCards?.classList.remove('active');
+    renderDictionary(dictFilterInput ? dictFilterInput.value.trim() : '');
+  });
+
   // =========================================================================
-  // 9. MODALS (ABOUT & GESTURE DETAIL)
+  // 9. MODALS (ABOUT & GESTURE DETAIL WITH VIDEO TUTORIAL)
   // =========================================================================
   const aboutModal = document.getElementById('aboutModal');
   const gestureDetailModal = document.getElementById('gestureDetailModal');
+  const detailTutorialVideo = document.getElementById('detailTutorialVideo');
+  const btnReplayTutorial = document.getElementById('btnReplayTutorial');
+  const speedBtns = document.querySelectorAll('.speed-btn[data-speed]');
 
   document.getElementById('openAboutBtn')?.addEventListener('click', () => {
     aboutModal?.classList.add('open');
@@ -486,9 +662,10 @@ document.addEventListener('DOMContentLoaded', () => {
     aboutModal?.classList.remove('open');
   });
 
-  // Chi tiết cử chỉ
+  // Chi tiết cử chỉ & Video hướng dẫn
   let activeModalGesture = null;
   const detailCatBadge = document.getElementById('detailCatBadge');
+  const detailSignerBadge = document.getElementById('detailSignerBadge');
   const detailGestureTitle = document.getElementById('detailGestureTitle');
   const detailGestureIcon = document.getElementById('detailGestureIcon');
   const detailGestureDesc = document.getElementById('detailGestureDesc');
@@ -497,24 +674,62 @@ document.addEventListener('DOMContentLoaded', () => {
   function openGestureDetail(g) {
     activeModalGesture = g;
     if (detailCatBadge) detailCatBadge.textContent = g.cat;
+    if (detailSignerBadge) detailSignerBadge.textContent = `🎬 Video mẫu chuẩn: Signer ${g.signer}`;
     if (detailGestureTitle) detailGestureTitle.textContent = g.name;
     if (detailGestureIcon) detailGestureIcon.textContent = g.icon;
     if (detailGestureDesc) detailGestureDesc.textContent = g.desc;
     if (detailGestureTip) detailGestureTip.textContent = g.tip;
+
+    if (detailTutorialVideo) {
+      detailTutorialVideo.poster = g.thumb;
+      detailTutorialVideo.src = g.video;
+      detailTutorialVideo.currentTime = 0;
+      detailTutorialVideo.playbackRate = state.currentSpeed || 1.0;
+      detailTutorialVideo.play().catch(() => {});
+    }
+
     gestureDetailModal?.classList.add('open');
   }
 
-  document.getElementById('closeDetailModal')?.addEventListener('click', () => {
+  function closeGestureDetail() {
     gestureDetailModal?.classList.remove('open');
     activeModalGesture = null;
-  });
+    if (detailTutorialVideo) {
+      detailTutorialVideo.pause();
+      detailTutorialVideo.removeAttribute('src');
+      detailTutorialVideo.load();
+    }
+  }
+
+  document.getElementById('closeDetailModal')?.addEventListener('click', closeGestureDetail);
 
   document.addEventListener('click', (e) => {
-    const card = e.target.closest('.dict-card');
+    const card = e.target.closest('.dict-card, .dict-video-card');
     if (card) {
       const gid = card.dataset.gestureId;
       const found = GESTURE_DATA.find(g => g.id === gid);
       if (found) openGestureDetail(found);
+    }
+  });
+
+  // Điều chỉnh tốc độ phát video hướng dẫn (0.5x, 0.75x, 1.0x)
+  speedBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const spd = parseFloat(btn.dataset.speed) || 1.0;
+      state.currentSpeed = spd;
+      speedBtns.forEach(b => b.classList.toggle('active', b === btn));
+      if (detailTutorialVideo) {
+        detailTutorialVideo.playbackRate = spd;
+      }
+    });
+  });
+
+  // Xem lại từ đầu
+  btnReplayTutorial?.addEventListener('click', () => {
+    if (detailTutorialVideo) {
+      detailTutorialVideo.currentTime = 0;
+      detailTutorialVideo.playbackRate = state.currentSpeed || 1.0;
+      detailTutorialVideo.play().catch(() => {});
     }
   });
 
@@ -524,28 +739,31 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btnDetailPractice')?.addEventListener('click', () => {
-    gestureDetailModal?.classList.remove('open');
+    closeGestureDetail();
     navigateToView('view-translate');
+    triggerBackendAction('start_camera');
   });
 
   // Đóng modal khi click ra nền ngoài hoặc nhấn ESC
-  [aboutModal, gestureDetailModal].forEach(m => {
-    m?.addEventListener('click', (e) => {
-      if (e.target === m) m.classList.remove('open');
-    });
+  aboutModal?.addEventListener('click', (e) => {
+    if (e.target === aboutModal) aboutModal.classList.remove('open');
+  });
+
+  gestureDetailModal?.addEventListener('click', (e) => {
+    if (e.target === gestureDetailModal) closeGestureDetail();
   });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       aboutModal?.classList.remove('open');
-      gestureDetailModal?.classList.remove('open');
+      closeGestureDetail();
     }
   });
 
   // =========================================================================
   // 10. INITIALIZATION
   // =========================================================================
+  updateCameraStateUI();
   initEventStream();
-  ensureLiveStreamRunning();
 
 });

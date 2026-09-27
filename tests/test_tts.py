@@ -70,6 +70,31 @@ class TestTTSIntegration(unittest.TestCase):
         self.assertEqual(resolve_vieneu_voice(""), "Trúc Ly")
         self.assertEqual(resolve_vieneu_voice(None), "Trúc Ly")
 
+    def test_normalize_speech_text(self):
+        from prototype_3_gestures.tts import normalize_speech_text
+
+        # Question marks
+        self.assertEqual(normalize_speech_text("Bạn có cần giúp đỡ không"), "Bạn có cần giúp đỡ không?")
+        self.assertEqual(normalize_speech_text("Bạn tên gì"), "Bạn tên gì?")
+        self.assertEqual(normalize_speech_text("Bạn quê ở đâu"), "Bạn quê ở đâu?")
+        self.assertEqual(normalize_speech_text("Như thế nào"), "Như thế nào?")
+        self.assertEqual(normalize_speech_text("Được không"), "Được không?")
+
+        # Exclamation marks for greetings and expressions
+        self.assertEqual(normalize_speech_text("Xin chào"), "Xin chào!")
+        self.assertEqual(normalize_speech_text("Cảm ơn"), "Cảm ơn!")
+        self.assertEqual(normalize_speech_text("Tạm biệt"), "Tạm biệt!")
+        self.assertEqual(normalize_speech_text("Rất vui được gặp bạn"), "Rất vui được gặp bạn!")
+
+        # Preserved existing punctuation
+        self.assertEqual(normalize_speech_text("Xin chào!"), "Xin chào!")
+        self.assertEqual(normalize_speech_text("Khỏe không?"), "Khỏe không?")
+
+        # Normal declarative sentences
+        self.assertEqual(normalize_speech_text("Tôi khỏe"), "Tôi khỏe.")
+        self.assertEqual(normalize_speech_text("Siêu thị"), "Siêu thị.")
+        self.assertEqual(normalize_speech_text(""), "")
+
 
 if __name__ == "__main__":
     unittest.main()
