@@ -174,7 +174,21 @@
     <!-- ======================================================== -->
     <section id="view-translate" class="page-view">
       <div class="translate-container">
-        
+
+        <!-- Signer Identification & Remote Storage Bar -->
+        <div class="signer-bar-card">
+          <div class="signer-input-wrap">
+            <span class="signer-user-icon">👤</span>
+            <label for="signerNameInput" class="signer-label">Người thử nghiệm:</label>
+            <input type="text" id="signerNameInput" class="signer-name-input" placeholder="Nhập tên của bạn (VD: Huy, Ngọc, P05)..." maxlength="32" autocomplete="off">
+            <span class="signer-saved-badge" id="signerSavedBadge">✓ Đã lưu</span>
+          </div>
+          <div class="signer-storage-status">
+            <span class="storage-indicator-dot" id="backendConnDot"></span>
+            <span id="backendConnText">Kho lưu video: <strong>ntbii305/vslr-remote</strong></span>
+          </div>
+        </div>
+
         <!-- Dual Columns: Video Output & Predicted Text (Exact Screenshot 3 Layout) -->
         <div class="translation-dual-box">
           

@@ -217,6 +217,7 @@ class SaveTask:
     output_dir: Path
     fps: float
     record_mode: str = "both"
+    signer_name: str = "guest"
 
 
 class GestureVideoRecorder:
@@ -293,6 +294,7 @@ class GestureVideoRecorder:
         decision: Any,
         labels: list[str] | None = None,
         duration: float = 0.0,
+        signer_name: str | None = None,
     ) -> None:
         """Chốt cử chỉ và đẩy sang background worker để xuất video kèm chẩn đoán."""
         if not self.enabled:
@@ -332,6 +334,8 @@ class GestureVideoRecorder:
         if calc_duration <= 0.0 and len(frames_to_save) >= 2:
             calc_duration = max(0.0, frames_to_save[-1].timestamp - frames_to_save[0].timestamp)
 
+        clean_signer = (signer_name or "").strip() or "guest"
+
         task = SaveTask(
             frames=frames_to_save,
             label=label,
@@ -343,6 +347,7 @@ class GestureVideoRecorder:
             output_dir=self.output_dir,
             fps=self.fps,
             record_mode=self.record_mode,
+            signer_name=clean_signer,
         )
         self._task_queue.put(task)
 
@@ -592,8 +597,12 @@ class GestureVideoRecorder:
         status_tag = "ACCEPTED" if task.accepted else "REJECTED"
         label_slug = slugify(task.label)
         conf_tag = f"{int(round(task.confidence * 100))}pct"
+        signer_slug = slugify(task.signer_name) if task.signer_name and task.signer_name.lower() != "guest" else ""
 
-        base_name = f"{timestamp_str}_{status_tag}_{label_slug}_{conf_tag}"
+        if signer_slug:
+            base_name = f"{timestamp_str}_{signer_slug}_{status_tag}_{label_slug}_{conf_tag}"
+        else:
+            base_name = f"{timestamp_str}_{status_tag}_{label_slug}_{conf_tag}"
         meta_path = task.output_dir / f"{base_name}.json"
 
         # Tính toán tỷ lệ phát hiện tay để phân tích
@@ -709,6 +718,7 @@ class GestureVideoRecorder:
         # 3. Lưu file metadata JSON cùng tên
         metadata = {
             "timestamp": now_dt.isoformat(),
+            "signer": task.signer_name,
             "videos": saved_video_names,
             "status": status_tag,
             "label": task.label,
@@ -736,6 +746,56 @@ class GestureVideoRecorder:
 
         video_desc = " & ".join(saved_video_names)
         print(
-            f"[RECORDER] Đã lưu video cử chỉ: {video_desc} "
+            f"[RECORDER] Đã lưu video cử chỉ ({task.signer_name}): {video_desc} "
             f"({total_frames} frames @ {actual_fps:.1f} FPS chuẩn thực tế, {task.duration_seconds:.2f}s) -> {status_tag} {task.label} ({task.confidence:.1%})"
         )
+
+        # 4. Tự động đẩy ngầm lên Hugging Face Dataset API (nếu có cấu hình HF_TOKEN)
+        hf_token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or "").strip()
+        hf_dataset = (os.environ.get("HF_DATASET_REPO") or "ntbii305/vslr-remote").strip()
+        if hf_token and hf_dataset:
+            folder_slug = signer_slug or "guest"
+            files_to_upload = [meta_path] + [task.output_dir / name for name in saved_video_names]
+            self._upload_to_huggingface_async(
+                token=hf_token,
+                repo_id=hf_dataset,
+                folder_slug=folder_slug,
+                file_paths=files_to_upload,
+                commit_title=f"[{status_tag}] {task.signer_name}: {task.label} ({conf_tag})",
+            )
+
+    def _upload_to_huggingface_async(
+        self,
+        token: str,
+        repo_id: str,
+        folder_slug: str,
+        file_paths: list[Path],
+        commit_title: str,
+    ) -> None:
+        """Đẩy batch video và JSON lên Hugging Face Dataset ở luồng ngầm (0ms ảnh hưởng camera)."""
+        def _upload_worker() -> None:
+            try:
+                from huggingface_hub import CommitOperationAdd, HfApi
+
+                api = HfApi(token=token)
+                operations = []
+                for fp in file_paths:
+                    if fp.exists():
+                        operations.append(
+                            CommitOperationAdd(
+                                path_in_repo=f"data/{folder_slug}/{fp.name}",
+                                path_or_fileobj=str(fp),
+                            )
+                        )
+                if operations:
+                    api.create_commit(
+                        repo_id=repo_id,
+                        repo_type="dataset",
+                        operations=operations,
+                        commit_message=commit_title,
+                    )
+                    print(f"[HF DATASET] Đã đồng bộ {len(operations)} file lên Hugging Face Dataset '{repo_id}' -> data/{folder_slug}/")
+            except Exception as exc:
+                print(f"[HF DATASET WARNING] Không thể đồng bộ lên Hugging Face ({repo_id}): {exc}", file=sys.stderr)
+
+        threading.Thread(target=_upload_worker, daemon=True, name="HFDatasetUploader").start()

@@ -51,13 +51,25 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // =========================================================================
-  // 2. APPLICATION STATE
+  // 2. APPLICATION STATE & BACKEND ENDPOINT RESOLUTION
   // =========================================================================
+  const isLocalHost = (
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname.endsWith('.hf.space')
+  );
+  const DEFAULT_REMOTE_BACKEND = 'https://ntbii305-vslr-backend.hf.space';
+  const API_BASE = isLocalHost ? '' : (localStorage.getItem('vslr_backend_url') || DEFAULT_REMOTE_BACKEND);
+
   const state = {
     activeView: 'view-home',
     dictViewMode: 'cards', // 'cards' | 'videos'
     currentSpeed: 1.0,
     cameraEnabled: false,
+    clientCamMode: !isLocalHost,
+    clientStream: null,
+    clientFrameTimer: null,
+    signerName: localStorage.getItem('vslr_signer_name') || '',
     sentence: [],
     recMode: 'auto',       // 'auto' | 'manual'
     showHands: true,
@@ -76,6 +88,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnMainToggleTranslate = document.getElementById('btnMainToggleTranslate');
   const sentenceWordsBox = document.getElementById('sentenceWordsBox');
   const liveStreamImg = document.getElementById('liveStreamImg');
+  const liveVideo = document.getElementById('liveVideo');
   const camStandbyScreen = document.getElementById('camStandbyScreen');
   const btnHeroStartCam = document.getElementById('btnHeroStartCam');
   const btnToggleCamera = document.getElementById('btnToggleCamera');
@@ -90,7 +103,31 @@ document.addEventListener('DOMContentLoaded', () => {
   const hudCamStatus = document.getElementById('hudCamStatus');
   const hudHandsStatus = document.getElementById('hudHandsStatus');
   const hudVoiceStatus = document.getElementById('hudVoiceStatus');
+  const signerNameInput = document.getElementById('signerNameInput');
+  const signerSavedBadge = document.getElementById('signerSavedBadge');
   const recentGesturesHistory = [];
+
+  // Khởi tạo & đồng bộ tên người thử nghiệm (Signer Name)
+  let signerDebounceTimer = null;
+  if (signerNameInput) {
+    signerNameInput.value = state.signerName;
+    if (state.signerName) {
+      fetch(`${API_BASE}/api/signer?name=${encodeURIComponent(state.signerName)}`, { method: 'POST' }).catch(() => {});
+    }
+    signerNameInput.addEventListener('input', (e) => {
+      const val = e.target.value.trim();
+      state.signerName = val;
+      localStorage.setItem('vslr_signer_name', val);
+      if (signerDebounceTimer) clearTimeout(signerDebounceTimer);
+      signerDebounceTimer = setTimeout(() => {
+        fetch(`${API_BASE}/api/signer?name=${encodeURIComponent(val || 'Khách')}`, { method: 'POST' }).catch(() => {});
+        if (signerSavedBadge) {
+          signerSavedBadge.classList.add('visible');
+          setTimeout(() => signerSavedBadge.classList.remove('visible'), 1600);
+        }
+      }, 350);
+    });
+  }
 
   // =========================================================================
   // 3. NAVIGATION
@@ -140,8 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!text || !text.trim()) return;
     const cleanText = text.trim();
 
-    // 1. Gọi API VieNeu-TTS backend (phát trực tiếp ra loa máy tính; chỉ phát trên trình duyệt nếu server trả về WAV)
-    fetch(`/api/tts?text=${encodeURIComponent(cleanText)}&voice=${encodeURIComponent(state.ttsVoice)}&play_server=true`)
+    // Gọi API VieNeu-TTS backend với play_server=false để nhận luồng WAV phát trên loa trình duyệt
+    fetch(`${API_BASE}/api/tts?text=${encodeURIComponent(cleanText)}&voice=${encodeURIComponent(state.ttsVoice)}&play_server=false`)
       .then(res => {
         const contentType = res.headers.get("content-type") || "";
         if (contentType.includes("audio/wav")) {
@@ -170,7 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // =========================================================================
   async function triggerBackendAction(actionName) {
     try {
-      const res = await fetch(`/api/action?action=${encodeURIComponent(actionName)}`, {
+      const res = await fetch(`${API_BASE}/api/action?action=${encodeURIComponent(actionName)}`, {
         method: 'POST'
       });
       return await res.json();
@@ -193,13 +230,118 @@ document.addEventListener('DOMContentLoaded', () => {
 
   btnToggleTheater?.addEventListener('click', toggleTheaterMode);
 
+  // Khởi tạo luồng Webcam Trình duyệt (Client Webcam cho máy bạn bè từ xa)
+  let frameCanvas = null;
+
+  async function startClientWebcam() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+        audio: false
+      });
+      state.clientStream = stream;
+      if (liveVideo) {
+        liveVideo.srcObject = stream;
+        liveVideo.classList.remove('hidden');
+        liveVideo.style.display = 'block';
+        liveVideo.style.transform = 'scaleX(-1)';
+        await liveVideo.play().catch(() => {});
+      }
+      if (liveStreamImg) {
+        liveStreamImg.classList.add('hidden');
+        liveStreamImg.style.display = 'none';
+        liveStreamImg.removeAttribute('src');
+      }
+      state.cameraEnabled = true;
+      updateCameraStateUI();
+      startFrameStreamingLoop();
+      triggerBackendAction('start_camera');
+    } catch (err) {
+      console.error("Không thể mở Webcam trình duyệt:", err);
+      alert("Vui lòng cấp quyền truy cập Webcam trên trình duyệt để nhận diện!");
+    }
+  }
+
+  function stopClientWebcam() {
+    if (state.clientFrameTimer) {
+      clearInterval(state.clientFrameTimer);
+      state.clientFrameTimer = null;
+    }
+    if (state.clientStream) {
+      state.clientStream.getTracks().forEach(t => t.stop());
+      state.clientStream = null;
+    }
+    if (liveVideo) {
+      liveVideo.pause();
+      liveVideo.srcObject = null;
+      liveVideo.style.display = 'none';
+    }
+    state.cameraEnabled = false;
+    updateCameraStateUI();
+    triggerBackendAction('stop_camera');
+  }
+
+  function toggleCameraAction() {
+    if (state.clientCamMode || !isLocalHost) {
+      if (state.cameraEnabled) {
+        stopClientWebcam();
+      } else {
+        startClientWebcam();
+      }
+    } else {
+      triggerBackendAction('toggle_camera');
+    }
+  }
+
+  function startFrameStreamingLoop() {
+    if (state.clientFrameTimer) clearInterval(state.clientFrameTimer);
+    if (!frameCanvas) {
+      frameCanvas = document.createElement('canvas');
+      frameCanvas.width = 480;
+      frameCanvas.height = 360;
+    }
+    const ctx = frameCanvas.getContext('2d');
+    let sending = false;
+
+    // Truyền frame nén ngầm với nhịp độ ~12 FPS (khoảng 80ms)
+    state.clientFrameTimer = setInterval(() => {
+      if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended || sending) return;
+      try {
+        ctx.drawImage(liveVideo, 0, 0, frameCanvas.width, frameCanvas.height);
+        frameCanvas.toBlob((blob) => {
+          if (!blob) return;
+          sending = true;
+          fetch(`${API_BASE}/api/client_frame?signer=${encodeURIComponent(state.signerName || 'Khách')}`, {
+            method: 'POST',
+            body: blob,
+            headers: { 'Content-Type': 'image/jpeg' }
+          })
+          .then(r => r.json())
+          .then(res => {
+            if (res && hudFpsVal && res.fps) {
+              hudFpsVal.textContent = res.fps.toFixed(1);
+            }
+            if (res && hudHandsStatus && typeof res.hands_count !== 'undefined') {
+              hudHandsStatus.textContent = `${res.hands_count} tay`;
+              hudHandsStatus.style.color = res.hands_count > 0 ? '#38bdf8' : '#94a3b8';
+            }
+          })
+          .catch(() => {})
+          .finally(() => { sending = false; });
+        }, 'image/jpeg', 0.60);
+      } catch (e) {
+        sending = false;
+      }
+    }, 80);
+  }
+
   // Phím bấm giao diện
-  btnHeroStartCam?.addEventListener('click', () => triggerBackendAction('start_camera'));
-  btnToggleCamera?.addEventListener('click', () => triggerBackendAction('toggle_camera'));
+  btnHeroStartCam?.addEventListener('click', toggleCameraAction);
+  btnToggleCamera?.addEventListener('click', toggleCameraAction);
 
   btnMainToggleTranslate?.addEventListener('click', () => {
     if (!state.cameraEnabled) {
-      triggerBackendAction('start_camera');
+      toggleCameraAction();
     } else {
       triggerBackendAction('space');
     }
@@ -232,14 +374,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (e.key === 'w' || e.key === 'W') {
       e.preventDefault();
-      triggerBackendAction('toggle_camera');
+      toggleCameraAction();
     } else if (e.code === 'Space') {
       e.preventDefault();
       if (state.activeView !== 'view-translate') {
         navigateToView('view-translate');
       }
       if (!state.cameraEnabled) {
-        triggerBackendAction('start_camera');
+        toggleCameraAction();
       } else {
         triggerBackendAction('space');
       }
@@ -269,7 +411,7 @@ document.addEventListener('DOMContentLoaded', () => {
       state.eventSource.close();
     }
 
-    state.eventSource = new EventSource('/api/events');
+    state.eventSource = new EventSource(`${API_BASE}/api/events`);
 
     state.eventSource.onopen = () => {
       state.backendConnected = true;
@@ -304,6 +446,10 @@ document.addEventListener('DOMContentLoaded', () => {
         state.showHands = !!data.show_hands;
         state.ttsVoice = data.tts_voice || 'Trúc Ly';
         state.sentence = data.sentence || [];
+        if (data.signer && !state.signerName) {
+          state.signerName = data.signer;
+          if (signerNameInput) signerNameInput.value = data.signer;
+        }
         updateCameraStateUI();
         updateModeUI();
         updateHandsUI();
@@ -314,6 +460,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       case 'camera_state':
         state.cameraEnabled = !!data.enabled;
+        if (data.client_mode) {
+          state.clientCamMode = true;
+        }
         updateCameraStateUI();
         if (state.cameraEnabled && data.name && hudCamStatus) {
           hudCamStatus.textContent = `[${data.index}] ${data.name}`;
@@ -394,6 +543,9 @@ document.addEventListener('DOMContentLoaded', () => {
           if (recStatusText) {
             recStatusText.textContent = `ĐÃ DỊCH: ${data.label} (${data.confidence}%)`;
           }
+
+          // Phát âm trên loa thiết bị người dùng (đặc biệt khi truy cập từ xa)
+          speakText(data.label);
         } else {
           if (recStatusText) {
             recStatusText.textContent = `BỎ QUA: ${data.label} (${data.confidence}%) — ${data.reason}`;
@@ -410,6 +562,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (recStatusText) {
           recStatusText.textContent = `ĐÃ PHÁT ÂM: "${data.text}" (${state.ttsVoice})`;
         }
+        speakText(data.text);
         state.sentence = [];
         renderSentence();
         break;
@@ -484,7 +637,7 @@ document.addEventListener('DOMContentLoaded', () => {
       state.sentence.splice(idx, 1);
       renderSentence();
       // Đồng bộ về backend
-      fetch(`/api/action?action=clear`, { method: 'POST' }).then(() => {
+      fetch(`${API_BASE}/api/action?action=clear`, { method: 'POST' }).then(() => {
         state.sentence.forEach(w => {
           // preserve client edit
         });
@@ -499,12 +652,23 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.cameraEnabled) {
       camStandbyScreen?.classList.add('hidden');
       camPrompt?.classList.add('hidden');
-      if (liveStreamImg) {
-        liveStreamImg.classList.remove('hidden');
-        liveStreamImg.style.display = 'block';
-        const curSrc = liveStreamImg.getAttribute('src') || '';
-        if (!curSrc.includes('/api/video_feed')) {
-          liveStreamImg.src = '/api/video_feed?t=' + Date.now();
+      if (state.clientStream) {
+        if (liveVideo) {
+          liveVideo.classList.remove('hidden');
+          liveVideo.style.display = 'block';
+        }
+        if (liveStreamImg) {
+          liveStreamImg.classList.add('hidden');
+          liveStreamImg.style.display = 'none';
+        }
+      } else {
+        if (liveStreamImg) {
+          liveStreamImg.classList.remove('hidden');
+          liveStreamImg.style.display = 'block';
+          const curSrc = liveStreamImg.getAttribute('src') || '';
+          if (!curSrc.includes('/api/video_feed')) {
+            liveStreamImg.src = `${API_BASE}/api/video_feed?t=` + Date.now();
+          }
         }
       }
       if (recStatusTag) recStatusTag.style.display = 'flex';
@@ -518,6 +682,10 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       camStandbyScreen?.classList.remove('hidden');
       camPrompt?.classList.add('hidden');
+      if (liveVideo) {
+        liveVideo.classList.add('hidden');
+        liveVideo.style.display = 'none';
+      }
       if (liveStreamImg) {
         liveStreamImg.removeAttribute('src');
         liveStreamImg.classList.add('hidden');
@@ -528,7 +696,7 @@ document.addEventListener('DOMContentLoaded', () => {
         recStatusTag.style.display = 'none';
       }
       if (hudFpsVal) hudFpsVal.textContent = '0.0';
-      if (hudCamStatus) hudCamStatus.textContent = 'Chờ bật (Tắt)';
+      if (hudCamStatus) hudCamStatus.textContent = state.clientStream ? 'Webcam Trình duyệt' : 'Chờ bật (Tắt)';
       if (hudHandsStatus) {
         hudHandsStatus.textContent = '0 tay';
         hudHandsStatus.style.color = '#94a3b8';
@@ -545,20 +713,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function ensureLiveStreamRunning() {
-    if (!state.cameraEnabled) return;
+    if (!state.cameraEnabled || state.clientStream) return;
     if (liveStreamImg) {
-      liveStreamImg.src = '/api/video_feed?t=' + Date.now();
+      liveStreamImg.src = `${API_BASE}/api/video_feed?t=` + Date.now();
       camPrompt?.classList.add('hidden');
     }
   }
 
-  btnStartRealCam?.addEventListener('click', () => {
-    triggerBackendAction('start_camera');
-  });
+  btnStartRealCam?.addEventListener('click', toggleCameraAction);
 
   // Handle stream reload if image errors while camera is enabled
   liveStreamImg?.addEventListener('error', () => {
-    if (!state.cameraEnabled) return;
+    if (!state.cameraEnabled || state.clientStream) return;
     camPrompt?.classList.remove('hidden');
     setTimeout(ensureLiveStreamRunning, 2000);
   });

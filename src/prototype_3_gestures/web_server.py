@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 import soundfile as sf
 import torch
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -105,7 +105,8 @@ class RealtimeVSLRPipeline:
         no_record: bool = False,
         allow_uncalibrated: bool = True,
     ) -> None:
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        is_cloud_env = bool(os.environ.get("SPACES_ZERO_GPU") or os.environ.get("SPACE_ID"))
+        self.device = torch.device("cuda" if (torch.cuda.is_available() and not is_cloud_env) else "cpu")
         self.model_path = Path(model_path)
         self.confidence_threshold = confidence_threshold
         self.cooldown = cooldown
@@ -146,6 +147,8 @@ class RealtimeVSLRPipeline:
         self.cap: cv2.VideoCapture | None = None
         self.camera_lock = threading.Lock()
         self.camera_enabled = False
+        self.current_signer: str = "Khách"
+        self.last_external_frame_time: float = 0.0
 
         self.running = False
         self.camera_thread: threading.Thread | None = None
@@ -251,13 +254,32 @@ class RealtimeVSLRPipeline:
             print(f"[Pipeline] Đã BẬT Webcam & Nhận diện: [{self.current_camera_idx}] {self.current_camera_name}")
             return True
         else:
-            self.camera_enabled = False
+            # Fallback chế độ Cloud / Trình duyệt từ xa: Cho phép nhận luồng từ Webcam Client (Browser)
+            self.camera_enabled = True
+            self.current_camera_idx = -1
+            self.current_camera_name = "Webcam Trình duyệt (Client Stream)"
+            self.tracker.reset()
+            self.in_segment = False
+            self.hands_count = 0
             self.broadcast_event({
                 "type": "camera_state",
-                "enabled": False,
-                "error": "Không thể kết nối webcam",
+                "enabled": True,
+                "index": -1,
+                "name": self.current_camera_name,
+                "client_mode": True,
             })
-            return False
+            print(f"[Pipeline] Chuyển sang chế độ Camera Trình duyệt (Client Stream). Sẵn sàng nhận frame từ Web.")
+            return True
+
+    def inject_external_frame(self, frame: np.ndarray, signer: str | None = None) -> None:
+        """Đẩy frame từ Web Client (trình duyệt của bạn bè) vào luồng AI nhận diện thời gian thực."""
+        if signer and signer.strip():
+            self.current_signer = signer.strip()
+        self.camera_enabled = True
+        self.last_external_frame_time = time.monotonic()
+        with self.ai_frame_lock:
+            self.ai_input_frame = frame
+        self.new_ai_frame_event.set()
 
     def stop_camera(self) -> None:
         self.camera_enabled = False
@@ -351,7 +373,12 @@ class RealtimeVSLRPipeline:
         )
 
         if self.recorder.enabled:
-            self.recorder.save_gesture(decision, labels=self.labels, duration=segment.duration)
+            self.recorder.save_gesture(
+                decision,
+                labels=self.labels,
+                duration=segment.duration,
+                signer_name=self.current_signer,
+            )
             status_desc = "ACCEPTED" if decision.accepted else "REJECTED"
             self.last_saved_info = f"Đã lưu video: {decision.label} [{status_desc}]"
             self.last_saved_time = time.monotonic()
@@ -373,7 +400,7 @@ class RealtimeVSLRPipeline:
             self.sentence.append(decision.label)
             self.last_sentence_activity = now_seg
 
-            print(f"[WORD RECOGNIZED] -> {decision.label} ({conf_pct}%) | Câu: {' '.join(self.sentence)}")
+            print(f"[WORD RECOGNIZED] ({self.current_signer}) -> {decision.label} ({conf_pct}%) | Câu: {' '.join(self.sentence)}")
 
             self.latest_decision = {
                 "label": decision.label,
@@ -381,6 +408,7 @@ class RealtimeVSLRPipeline:
                 "accepted": True,
                 "reason": "",
                 "sentence": list(self.sentence),
+                "signer": self.current_signer,
             }
 
             self.broadcast_event({
@@ -390,19 +418,22 @@ class RealtimeVSLRPipeline:
                 "accepted": True,
                 "reason": "",
                 "sentence": list(self.sentence),
+                "signer": self.current_signer,
             })
 
-            # Auto-speak current word if sentence is single or immediate feedback
-            self.tts_mgr.speak(decision.label)
+            # Auto-speak current word nếu không phải môi trường Cloud / Headless
+            if not os.environ.get("SPACE_ID"):
+                self.tts_mgr.speak(decision.label)
 
         else:
             self.last_accepted_label = None
-            print(f"[REJECT] -> {decision.label} ({conf_pct}%) — {decision.reason}")
+            print(f"[REJECT] ({self.current_signer}) -> {decision.label} ({conf_pct}%) — {decision.reason}")
             self.latest_decision = {
                 "label": decision.label,
                 "confidence": conf_pct,
                 "accepted": False,
                 "reason": decision.reason,
+                "signer": self.current_signer,
             }
             self.broadcast_event({
                 "type": "prediction",
@@ -411,15 +442,22 @@ class RealtimeVSLRPipeline:
                 "accepted": False,
                 "reason": decision.reason,
                 "sentence": list(self.sentence),
+                "signer": self.current_signer,
             })
 
     def speak_sentence_now(self) -> None:
         if not self.sentence:
-            self.tts_mgr.speak("Xin chào")
+            if not os.environ.get("SPACE_ID"):
+                self.tts_mgr.speak("Xin chào")
+            self.broadcast_event({
+                "type": "sentence_spoken",
+                "text": "Xin chào",
+            })
             return
         text = " ".join(self.sentence)
         print(f"[TTS SENTENCE] -> {text}")
-        self.tts_mgr.speak(text)
+        if not os.environ.get("SPACE_ID"):
+            self.tts_mgr.speak(text)
         self.broadcast_event({
             "type": "sentence_spoken",
             "text": text,
@@ -499,6 +537,11 @@ class RealtimeVSLRPipeline:
         while self.running:
             if not self.camera_enabled:
                 time.sleep(0.04)
+                continue
+
+            # Nếu đang có luồng frame từ trình duyệt (client feed) trong 3s qua, nhường luồng AI cho client
+            if (time.monotonic() - getattr(self, "last_external_frame_time", 0.0)) < 3.0:
+                time.sleep(0.02)
                 continue
 
             with self.camera_lock:
@@ -705,7 +748,11 @@ class RealtimeVSLRPipeline:
                     })
 
 
-def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
+def create_app(
+    pipeline: RealtimeVSLRPipeline,
+    web_dir: str | Path,
+    static_mount_path: str = "/",
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         pipeline.set_event_loop(asyncio.get_event_loop())
@@ -785,6 +832,7 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
                     "show_hands": pipeline.show_hands,
                     "sentence": list(pipeline.sentence),
                     "tts_voice": pipeline.tts_voice,
+                    "signer": pipeline.current_signer,
                 }, ensure_ascii=False)
                 yield f"data: {init_data}\n\n"
 
@@ -935,8 +983,81 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
             "hands_count": pipeline.hands_count,
             "sentence": pipeline.sentence,
             "tts_voice": pipeline.tts_voice,
+            "signer": pipeline.current_signer,
+            "dataset_repo": os.environ.get("HF_DATASET_REPO", "ntbii305/vslr-remote"),
             "model": "BiLSTM Holistic v3 (24 Classes)",
         }
+
+    # 7. Signer Name Management API
+    @app.get("/api/signer")
+    async def get_signer():
+        return {"signer": pipeline.current_signer}
+
+    @app.post("/api/signer")
+    async def set_signer(name: str = Query("Khách")):
+        cleaned = name.strip() or "Khách"
+        pipeline.current_signer = cleaned
+        pipeline.broadcast_event({
+            "type": "signer_updated",
+            "signer": pipeline.current_signer,
+        })
+        return {"status": "ok", "signer": pipeline.current_signer}
+
+    # 8. Client Frame Injection API (Webcam từ trình duyệt từ xa gửi về AI)
+    @app.post("/api/client_frame")
+    async def post_client_frame(request: Request, signer: str = Query(None)):
+        content_type = request.headers.get("content-type", "")
+        img_bytes = None
+        if "application/json" in content_type:
+            try:
+                body = await request.json()
+                img_b64 = body.get("image", "")
+                if signer is None:
+                    signer = body.get("signer", None)
+                if "," in img_b64:
+                    img_b64 = img_b64.split(",", 1)[1]
+                import base64
+                img_bytes = base64.b64decode(img_b64)
+            except Exception:
+                img_bytes = None
+        else:
+            img_bytes = await request.body()
+
+        if img_bytes:
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is not None:
+                pipeline.inject_external_frame(frame, signer=signer)
+                return {
+                    "status": "ok",
+                    "hands_count": pipeline.hands_count,
+                    "in_segment": pipeline.in_segment,
+                    "fps": round(pipeline.fps, 1),
+                }
+        return JSONResponse({"status": "error", "detail": "Invalid frame"}, status_code=400)
+
+    # 9. WebSocket Client Stream (Tốc độ cao cho Client Webcam)
+    @app.websocket("/api/ws/client_feed")
+    async def websocket_client_feed(websocket: WebSocket):
+        await websocket.accept()
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                if data:
+                    nparr = np.frombuffer(data, np.uint8)
+                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        pipeline.inject_external_frame(frame)
+                        await websocket.send_json({
+                            "type": "telemetry",
+                            "hands": pipeline.hands_count,
+                            "in_segment": pipeline.in_segment,
+                            "fps": round(pipeline.fps, 1),
+                        })
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
 
     # Mount static files (Frontend HTML, CSS, JS)
     web_path = Path(web_dir).resolve()
@@ -950,8 +1071,9 @@ def create_app(pipeline: RealtimeVSLRPipeline, web_dir: str | Path) -> FastAPI:
             if candidate2.is_dir():
                 web_path = candidate2
 
-    print(f"[Static Files] Mount thư mục web: {web_path}")
-    app.mount("/", StaticFiles(directory=str(web_path), html=True), name="static")
+    if static_mount_path:
+        print(f"[Static Files] Mount thư mục web tại '{static_mount_path}': {web_path}")
+        app.mount(static_mount_path, StaticFiles(directory=str(web_path), html=True), name="static")
 
     return app
 
