@@ -166,14 +166,25 @@ class TTSManager:
             self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
             self._worker_thread.start()
 
+    def _create_vieneu_instance(self):
+        from vieneu import Vieneu
+
+        is_cloud = bool(os.environ.get("SPACE_ID") or os.environ.get("SPACES_ZERO_GPU"))
+        if is_cloud:
+            # Trên Cloud / Hugging Face ZeroGPU: ép chạy ONNX CPU để tránh lỗi "No CUDA GPUs are available"
+            return Vieneu(device="cpu", backend="onnx")
+        try:
+            return Vieneu()
+        except Exception:
+            # Fallback an toàn sang ONNX CPU nếu CUDA không khả dụng
+            return Vieneu(device="cpu", backend="onnx")
+
     def _preload_vieneu(self) -> None:
         with self._lock:
             if self._vieneu_instance is None:
                 try:
                     print(f"[TTS] Đang nạp model giọng đọc VieNeu-TTS ({self.voice})...")
-                    from vieneu import Vieneu
-
-                    self._vieneu_instance = Vieneu()
+                    self._vieneu_instance = self._create_vieneu_instance()
                     print(f"[TTS] Model giọng đọc VieNeu-TTS đã sẵn sàng!")
                 except Exception as exc:
                     print(f"[TTS] Không thể khởi tạo VieNeu-TTS ({exc}), sẽ dùng bộ phát âm dự phòng.", file=sys.stderr)
@@ -184,9 +195,7 @@ class TTSManager:
             if self._vieneu_instance is None:
                 try:
                     print(f"[TTS] Đang nạp model giọng đọc VieNeu-TTS ({self.voice})...")
-                    from vieneu import Vieneu
-
-                    self._vieneu_instance = Vieneu()
+                    self._vieneu_instance = self._create_vieneu_instance()
                     print(f"[TTS] Model giọng đọc VieNeu-TTS đã sẵn sàng!")
                 except Exception as exc:
                     print(f"[TTS] Không thể khởi tạo VieNeu-TTS ({exc}), sẽ dùng bộ phát âm dự phòng.", file=sys.stderr)

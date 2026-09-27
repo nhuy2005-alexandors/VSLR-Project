@@ -86,46 +86,17 @@ def calculate_segment_motion(
     return max_motion
 
 
-def is_hand_raised_for_signing(obs: Any, res: Any) -> bool:
-    """Kiểm tra bàn tay có được dơ lên vùng ký hiệu (ngang ngực/mặt) hay không.
-    - Bình thường (tay hạ thấp hoặc không có tay): trả về False -> STANDBY (không nhận diện).
-    - Khi dơ tay lên vùng ký hiệu: trả về True -> Bắt đầu nhận diện ngay lập tức.
-    """
-    if not obs.hands_present:
-        return False
-
+def extract_raw_hand_coords(res: Any) -> list[tuple[float, float]]:
+    """Trích xuất tọa độ màn hình chuẩn [0..1] của các khớp tay chính (cổ tay 0, gốc ngón 5, 9, 17)."""
+    pts = []
     if res is None:
-        return True
-
-    # 1. Nếu nhận diện được 2 vai từ Pose: tính vùng ngực chuẩn theo tỷ lệ cơ thể
-    if hasattr(res, "pose_landmarks") and res.pose_landmarks:
-        lms = res.pose_landmarks.landmark
-        if len(lms) > 12:
-            vis11 = getattr(lms[11], "visibility", 1.0)
-            vis12 = getattr(lms[12], "visibility", 1.0)
-            if vis11 > 0.35 and vis12 > 0.35:
-                shoulder_y = (lms[11].y + lms[12].y) / 2.0
-                shoulder_span = max(abs(lms[11].x - lms[12].x), 0.12)
-                # Giới hạn dưới của vùng ký hiệu: ngang ngực (dưới đường vai tối đa 0.85 lần bề rộng vai)
-                chest_limit_y = shoulder_y + shoulder_span * 0.85
-
-                for hand_lms in (getattr(res, "left_hand_landmarks", None), getattr(res, "right_hand_landmarks", None)):
-                    if hand_lms and hand_lms.landmark:
-                        wrist_y = hand_lms.landmark[0].y
-                        knuckle_y = hand_lms.landmark[9].y
-                        if min(wrist_y, knuckle_y) < chest_limit_y:
-                            return True
-                return False
-
-    # 2. Dự phòng khi góc camera hẹp: bàn tay phải dơ lên trên (nằm trong 75% phía trên khung hình)
+        return pts
     for hand_lms in (getattr(res, "left_hand_landmarks", None), getattr(res, "right_hand_landmarks", None)):
         if hand_lms and hand_lms.landmark:
-            wrist_y = hand_lms.landmark[0].y
-            knuckle_y = hand_lms.landmark[9].y
-            if min(wrist_y, knuckle_y) < 0.75:
-                return True
-
-    return False
+            for idx in (0, 5, 9, 17):
+                lm = hand_lms.landmark[idx]
+                pts.append((float(lm.x), float(lm.y)))
+    return pts
 
 
 class RealtimeVSLRPipeline:
@@ -137,9 +108,9 @@ class RealtimeVSLRPipeline:
         camera_id: str | int = 0,
         confidence_threshold: float = 0.70,
         cooldown: float = 1.0,
-        word_gap: float = 0.28,
+        word_gap: float = 0.35,
         sentence_gap: float = 1.8,
-        min_seconds: float = 0.18,
+        min_seconds: float = 0.22,
         max_seconds: float = 5.0,
         tts_voice: str = "Trúc Ly",
         tts_engine: str = "vieneu",
@@ -230,15 +201,13 @@ class RealtimeVSLRPipeline:
         self.event_subscribers: list[asyncio.Queue] = []
         self.event_loop: asyncio.AbstractEventLoop | None = None
 
-        # Bộ lọc chuyển động chống nhận diện nhầm khi người dùng đứng yên
-        self.recent_hand_window: deque = deque(maxlen=6)
-        self.min_gesture_motion: float = 0.35
-        self.was_hand_raised: bool = False
-        self.waiting_for_next_move: bool = False
+        # Bộ lọc chuyển động và phát hiện đưa tay lên từ vị trí đứng yên
+        self.raw_hand_history: deque = deque(maxlen=4)
+        self.min_gesture_motion: float = 0.28
         self.still_since: float | None = None
 
-        # Kích hoạt ngay khi dơ tay lên vùng ký hiệu
-        self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=0.12)
+        # Kích hoạt nhạy 0.10s khi bắt đầu chuyển động đưa tay lên
+        self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=0.10)
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.event_loop = loop
@@ -675,58 +644,56 @@ class RealtimeVSLRPipeline:
                 num_hands = int(obs.left_hand_present) + int(obs.right_hand_present)
                 self.hands_count = num_hands
 
-                # 3. Gesture tracking state machine:
-                # - Bình thường (tay hạ thấp / không có tay): STANDBY (không nhận diện)
-                # - Khi vừa dơ tay lên: Bắt đầu nhận diện ngay lập tức
-                # - Khi để tay đứng yên: Tự động dừng và chờ cử động tiếp theo, không đoán bừa
-                hand_raised = is_hand_raised_for_signing(obs, res)
+                # 3. Gesture tracking state machine (Phát hiện sự thay đổi vị trí đưa tay lên từ đứng yên):
+                # - Khi tay đang đứng yên (ở bất kỳ vị trí nào): STANDBY (không nhận diện)
+                # - Ngay khi tay có sự thay đổi đưa lên hoặc bắt đầu cử động: Bắt đầu nhận diện ngay lập tức
+                current_raw_pts = extract_raw_hand_coords(res)
+                gesture_active = False
 
-                if obs.hands_present:
-                    self.recent_hand_window.append((obs.features, obs.left_hand_present, obs.right_hand_present))
-                else:
-                    self.recent_hand_window.clear()
+                if current_raw_pts:
+                    self.raw_hand_history.append((now, current_raw_pts))
+                    max_dist = 0.0
+                    max_upward = 0.0
 
-                recent_motion = 0.0
-                if len(self.recent_hand_window) >= 3:
-                    recent_motion = calculate_segment_motion(
-                        [x[0] for x in self.recent_hand_window],
-                        [x[1] for x in self.recent_hand_window],
-                        [x[2] for x in self.recent_hand_window],
-                    )
+                    if len(self.raw_hand_history) >= 2:
+                        _, pts0 = self.raw_hand_history[0]
+                        _, pts1 = self.raw_hand_history[-1]
+                        if len(pts0) == len(pts1) and len(pts0) > 0:
+                            diff = np.asarray(pts1) - np.asarray(pts0)
+                            max_dist = float(np.max(np.linalg.norm(diff, axis=1)))
+                            max_upward = float(np.max(np.asarray(pts0)[:, 1] - np.asarray(pts1)[:, 1]))
+                        else:
+                            max_dist = 0.03
+                            max_upward = 0.03
 
-                if not hand_raised:
-                    self.was_hand_raised = False
-                    self.waiting_for_next_move = False
-                    self.still_since = None
-                    gesture_active = False
-                else:
-                    if not self.was_hand_raised:
-                        # Vừa mới dơ tay lên vùng ký hiệu -> Kích hoạt nhận diện ngay!
-                        self.was_hand_raised = True
-                        self.waiting_for_next_move = False
-                        self.still_since = None
-                        gesture_active = True
-                    elif self.waiting_for_next_move:
-                        # Tay đang để yên trên không -> Chỉ ghi nhận lại khi bắt đầu cử động mới
-                        if recent_motion >= 0.22:
-                            self.waiting_for_next_move = False
-                            self.still_since = None
+                    # Phát hiện sự thay đổi đưa tay lên (max_upward >= 0.014) hoặc dịch chuyển (max_dist >= 0.020)
+                    hand_is_moving = max_upward >= 0.014 or max_dist >= 0.020
+
+                    if not self.in_segment:
+                        # Khi đang ở STANDBY: Chỉ kích hoạt khi tay có sự thay đổi đưa lên / chuyển động
+                        if hand_is_moving:
                             gesture_active = True
+                            self.still_since = None
                         else:
                             gesture_active = False
                     else:
-                        if recent_motion < 0.12:
+                        # Khi đang trong quá trình ghi cử chỉ:
+                        if max_dist >= 0.012:
+                            gesture_active = True
+                            self.still_since = None
+                        else:
                             if self.still_since is None:
                                 self.still_since = now
-                            elif (now - self.still_since) >= 0.55:
-                                # Tay đã dừng yên 0.55s -> Chốt đoạn hiện tại và chuyển sang chờ cử động mới
-                                self.waiting_for_next_move = True
+                                gesture_active = True
+                            elif (now - self.still_since) >= 0.35:
+                                # Tay đã dừng yên 0.35s sau cử chỉ -> Chốt đoạn cử chỉ để dịch
                                 gesture_active = False
                             else:
                                 gesture_active = True
-                        else:
-                            self.still_since = None
-                            gesture_active = True
+                else:
+                    self.raw_hand_history.clear()
+                    self.still_since = None
+                    gesture_active = False
 
                 if self.rec_mode == "manual":
                     if self.manual_recording:

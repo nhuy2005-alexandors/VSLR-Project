@@ -177,28 +177,36 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!text || !text.trim()) return;
     const cleanText = text.trim();
 
+    const fallbackBrowserSpeech = () => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        utterance.lang = 'vi-VN';
+        utterance.rate = 1.0;
+        window.speechSynthesis.speak(utterance);
+      }
+    };
+
     // Gọi API VieNeu-TTS backend với play_server=false để nhận luồng WAV phát trên loa trình duyệt
     fetch(`${API_BASE}/api/tts?text=${encodeURIComponent(cleanText)}&voice=${encodeURIComponent(state.ttsVoice)}&play_server=false`)
       .then(res => {
         const contentType = res.headers.get("content-type") || "";
-        if (contentType.includes("audio/wav")) {
+        if (res.ok && contentType.includes("audio/wav")) {
           return res.blob().then(blob => {
-            if (blob) {
+            if (blob && blob.size > 100) {
               const audioUrl = URL.createObjectURL(blob);
               const audio = new Audio(audioUrl);
-              audio.play().catch(() => {});
+              audio.play().catch(() => fallbackBrowserSpeech());
+              return;
             }
+            fallbackBrowserSpeech();
           });
         }
-        return res.json().catch(() => null);
+        // Nếu server không trả về WAV (ví dụ đang tải model), phát ngay giọng đọc dự phòng trên trình duyệt
+        fallbackBrowserSpeech();
       })
       .catch(() => {
-        // Dự phòng: Nếu server ngắt kết nối thì dùng tạm SpeechSynthesis trình duyệt
-        if ('speechSynthesis' in window) {
-          const utterance = new SpeechSynthesisUtterance(cleanText);
-          utterance.lang = 'vi-VN';
-          window.speechSynthesis.speak(utterance);
-        }
+        fallbackBrowserSpeech();
       });
   }
 
