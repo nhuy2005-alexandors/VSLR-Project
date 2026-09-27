@@ -1,17 +1,17 @@
 @echo off
 chcp 65001 >nul
-title VSLR - Tải Video Test từ Hugging Face Dataset về máy
+title VSLR - Tai Video Test tu Hugging Face Dataset ve may
 
 echo ====================================================================
-echo    TẢI TOÀN BỘ VIDEO TEST TỪ HUGGING FACE DATASET VỀ PHÂN TÍCH
+echo    TAI TOAN BO VIDEO TEST TU HUGGING FACE DATASET VE PHAN TICH
 echo    - Dataset: ntbii305/vslr-remote
-echo    - Thư mục lưu: videos_from_huggingface/
+echo    - Thu muc luu: videos_from_huggingface/
 echo ====================================================================
 echo.
 
 cd /d "%~dp0"
 
-:: Kiểm tra môi trường ảo venv
+:: Kiem tra moi truong ao venv
 if exist "%CD%\venv\Scripts\python.exe" (
     set "PY_BIN=%CD%\venv\Scripts\python.exe"
 ) else if exist "python.exe" (
@@ -24,7 +24,7 @@ if exist "%CD%\venv\Scripts\python.exe" (
 
 echo.
 echo ====================================================================
-echo Đã tải xong! Đang mở thư mục chứa video...
+echo Da tai xong! Dang mo thu muc chua video...
 echo ====================================================================
 if exist "videos_from_huggingface\data\khach" (
     start "" "videos_from_huggingface\data\khach"

@@ -1,18 +1,19 @@
 @echo off
 chcp 65001 >nul
-title VSLR - Chạy Public Cloudflare Tunnel (30 FPS Mượt Như Localhost)
+title VSLR - Chay Public Cloudflare Tunnel (30 FPS Muot Nhu Localhost)
 
 echo ====================================================================
-echo    VSLR: BẬT SERVER PUBLIC CLOUDFLARE TUNNEL (30 FPS - 0 LAG)
-echo    - Tốc độ: Ping nội địa 5-15ms, mượt 100% như localhost
-echo    - TTS: VieNeu-TTS Trúc Ly 48kHz
-echo    - Tự động lưu: Ổ cứng local + Hugging Face Dataset (ntbii305/vslr-remote)
+echo    VSLR: BAT SERVER PUBLIC CLOUDFLARE TUNNEL (30 FPS - 0 LAG)
+echo    - Toc do: Ping noi dia 5-15ms, muot 100%% nhu localhost
+echo    - TTS: VieNeu-TTS Truc Ly 48kHz
+echo    - Tu dong luu: O cung local + Hugging Face Dataset
 echo ====================================================================
 echo.
 
 cd /d "%~dp0"
+set "PYTHONPATH=%CD%\src;%PYTHONPATH%"
 
-:: Kiểm tra môi trường ảo venv
+:: Kiem tra moi truong ao venv
 if exist "%CD%\venv\Scripts\python.exe" (
     set "PY_BIN=%CD%\venv\Scripts\python.exe"
 ) else if exist "python.exe" (
@@ -24,5 +25,5 @@ if exist "%CD%\venv\Scripts\python.exe" (
 "%PY_BIN%" scripts\start_cloudflare_tunnel.py
 
 echo.
-echo Server đã dừng.
+echo Server da dung.
 pause
