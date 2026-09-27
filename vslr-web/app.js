@@ -232,6 +232,93 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Khởi tạo luồng Webcam Trình duyệt (Client Webcam cho máy bạn bè từ xa)
   let frameCanvas = null;
+  let clientWs = null;
+  const handLandmarkCanvas = document.getElementById('handLandmarkCanvas');
+
+  function drawHandSkeleton(ctx, pts, w, h, lineColor, pointColor) {
+    const HAND_LINES = [
+      [0, 1], [1, 2], [2, 3], [3, 4],
+      [0, 5], [5, 6], [6, 7], [7, 8],
+      [5, 9], [9, 10], [10, 11], [11, 12],
+      [9, 13], [13, 14], [14, 15], [15, 16],
+      [13, 17], [17, 18], [18, 19], [19, 20],
+      [0, 17]
+    ];
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2.5;
+    HAND_LINES.forEach(([i, j]) => {
+      if (pts[i] && pts[j]) {
+        ctx.beginPath();
+        ctx.moveTo(pts[i][0] * w, pts[i][1] * h);
+        ctx.lineTo(pts[j][0] * w, pts[j][1] * h);
+        ctx.stroke();
+      }
+    });
+    ctx.fillStyle = pointColor;
+    pts.forEach(([x, y]) => {
+      ctx.beginPath();
+      ctx.arc(x * w, y * h, 4.0, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  function drawSkeletonOverlay(skeleton) {
+    if (!handLandmarkCanvas) return;
+    if (!state.cameraEnabled || !state.showHands || !skeleton) {
+      handLandmarkCanvas.classList.remove('active');
+      handLandmarkCanvas.style.display = 'none';
+      return;
+    }
+
+    if (liveVideo && liveVideo.videoWidth > 0) {
+      if (handLandmarkCanvas.width !== liveVideo.videoWidth || handLandmarkCanvas.height !== liveVideo.videoHeight) {
+        handLandmarkCanvas.width = liveVideo.videoWidth;
+        handLandmarkCanvas.height = liveVideo.videoHeight;
+      }
+    }
+    handLandmarkCanvas.classList.add('active');
+    handLandmarkCanvas.style.display = 'block';
+    const ctx = handLandmarkCanvas.getContext('2d');
+    const w = handLandmarkCanvas.width || 640;
+    const h = handLandmarkCanvas.height || 480;
+    ctx.clearRect(0, 0, w, h);
+
+    // 1. Vẽ khung xương thân người (Pose)
+    if (skeleton.pose) {
+      const p = skeleton.pose;
+      ctx.strokeStyle = '#ffe119';
+      ctx.lineWidth = 2.5;
+      const poseLines = [
+        ['11', '12'], ['11', '13'], ['13', '15'],
+        ['12', '14'], ['14', '16'], ['11', '23'],
+        ['12', '24'], ['23', '24']
+      ];
+      poseLines.forEach(([i, j]) => {
+        if (p[i] && p[j]) {
+          ctx.beginPath();
+          ctx.moveTo(p[i][0] * w, p[i][1] * h);
+          ctx.lineTo(p[j][0] * w, p[j][1] * h);
+          ctx.stroke();
+        }
+      });
+      ctx.fillStyle = '#3cb44b';
+      Object.values(p).forEach(([x, y]) => {
+        ctx.beginPath();
+        ctx.arc(x * w, y * h, 4.0, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // 2. Vẽ khung xương Bàn tay Trái (Đỏ / Cam)
+    if (skeleton.left && skeleton.left.length === 21) {
+      drawHandSkeleton(ctx, skeleton.left, w, h, '#f58231', '#e6194b');
+    }
+
+    // 3. Vẽ khung xương Bàn tay Phải (Xanh dương / Cyan)
+    if (skeleton.right && skeleton.right.length === 21) {
+      drawHandSkeleton(ctx, skeleton.right, w, h, '#46f0f0', '#0082c8');
+    }
+  }
 
   async function startClientWebcam() {
     try {
@@ -267,6 +354,10 @@ document.addEventListener('DOMContentLoaded', () => {
       clearInterval(state.clientFrameTimer);
       state.clientFrameTimer = null;
     }
+    if (clientWs) {
+      try { clientWs.close(); } catch (e) {}
+      clientWs = null;
+    }
     if (state.clientStream) {
       state.clientStream.getTracks().forEach(t => t.stop());
       state.clientStream = null;
@@ -275,6 +366,10 @@ document.addEventListener('DOMContentLoaded', () => {
       liveVideo.pause();
       liveVideo.srcObject = null;
       liveVideo.style.display = 'none';
+    }
+    if (handLandmarkCanvas) {
+      handLandmarkCanvas.classList.remove('active');
+      handLandmarkCanvas.style.display = 'none';
     }
     state.cameraEnabled = false;
     updateCameraStateUI();
@@ -297,20 +392,57 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.clientFrameTimer) clearInterval(state.clientFrameTimer);
     if (!frameCanvas) {
       frameCanvas = document.createElement('canvas');
-      frameCanvas.width = 480;
-      frameCanvas.height = 360;
+      frameCanvas.width = 320;
+      frameCanvas.height = 240;
     }
     const ctx = frameCanvas.getContext('2d');
-    let sending = false;
+    let inFlight = 0;
 
-    // Truyền frame nén ngầm với nhịp độ ~12 FPS (khoảng 80ms)
+    // 1. Mở kết nối WebSocket tốc độ cao tới Backend
+    try {
+      if (clientWs) {
+        try { clientWs.close(); } catch (e) {}
+      }
+      const baseOrigin = API_BASE || window.location.origin;
+      const wsUrl = baseOrigin.replace(/^http/, 'ws') + '/api/ws/client_feed';
+      clientWs = new WebSocket(wsUrl);
+      clientWs.binaryType = 'arraybuffer';
+      clientWs.onmessage = (evt) => {
+        try {
+          const res = JSON.parse(evt.data);
+          if (res && hudFpsVal && res.fps) {
+            hudFpsVal.textContent = res.fps.toFixed(1);
+          }
+          if (res && hudHandsStatus && typeof res.hands !== 'undefined') {
+            hudHandsStatus.textContent = `${res.hands} tay`;
+            hudHandsStatus.style.color = res.hands > 0 ? '#38bdf8' : '#94a3b8';
+          }
+          if (res && res.skeleton !== undefined) {
+            drawSkeletonOverlay(res.skeleton);
+          }
+        } catch (err) {}
+      };
+    } catch (e) {
+      clientWs = null;
+    }
+
+    // 2. Vòng lặp truyền frame 320x240 siêu nhẹ (~7KB/frame) đạt 15-20 FPS
     state.clientFrameTimer = setInterval(() => {
-      if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended || sending) return;
+      if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended) return;
       try {
         ctx.drawImage(liveVideo, 0, 0, frameCanvas.width, frameCanvas.height);
         frameCanvas.toBlob((blob) => {
           if (!blob) return;
-          sending = true;
+
+          // Ưu tiên 1: Gửi qua WebSocket nếu kết nối sẵn sàng (0ms overhead)
+          if (clientWs && clientWs.readyState === WebSocket.OPEN && clientWs.bufferedAmount < 65536) {
+            clientWs.send(blob);
+            return;
+          }
+
+          // Ưu tiên 2: HTTP/2 Pipelined Multiplexing (cho phép tối đa 4 request song song)
+          if (inFlight >= 4) return;
+          inFlight++;
           fetch(`${API_BASE}/api/client_frame?signer=${encodeURIComponent(state.signerName || 'Khách')}`, {
             method: 'POST',
             body: blob,
@@ -325,14 +457,15 @@ document.addEventListener('DOMContentLoaded', () => {
               hudHandsStatus.textContent = `${res.hands_count} tay`;
               hudHandsStatus.style.color = res.hands_count > 0 ? '#38bdf8' : '#94a3b8';
             }
+            if (res && res.skeleton !== undefined) {
+              drawSkeletonOverlay(res.skeleton);
+            }
           })
           .catch(() => {})
-          .finally(() => { sending = false; });
-        }, 'image/jpeg', 0.60);
-      } catch (e) {
-        sending = false;
-      }
-    }, 80);
+          .finally(() => { inFlight = Math.max(0, inFlight - 1); });
+        }, 'image/jpeg', 0.50);
+      } catch (e) {}
+    }, 65);
   }
 
   // Phím bấm giao diện

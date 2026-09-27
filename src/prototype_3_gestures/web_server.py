@@ -603,6 +603,29 @@ class RealtimeVSLRPipeline:
                 res = getattr(obs, "results", None)
                 self.latest_results = res
 
+                # Trích xuất tọa độ khớp 2D nhẹ cho Client Canvas vẽ khung xương trực tiếp
+                skeleton_payload = None
+                if res is not None:
+                    pose_dict = {}
+                    left_list = []
+                    right_list = []
+                    if hasattr(res, "pose_landmarks") and res.pose_landmarks:
+                        for idx, lm in enumerate(res.pose_landmarks.landmark):
+                            if idx >= 11 and getattr(lm, "visibility", 1.0) > 0.4:
+                                pose_dict[str(idx)] = [round(lm.x, 3), round(lm.y, 3)]
+                    if hasattr(res, "left_hand_landmarks") and res.left_hand_landmarks:
+                        for lm in res.left_hand_landmarks.landmark:
+                            left_list.append([round(lm.x, 3), round(lm.y, 3)])
+                    if hasattr(res, "right_hand_landmarks") and res.right_hand_landmarks:
+                        for lm in res.right_hand_landmarks.landmark:
+                            right_list.append([round(lm.x, 3), round(lm.y, 3)])
+                    skeleton_payload = {
+                        "pose": pose_dict,
+                        "left": left_list,
+                        "right": right_list,
+                    }
+                self.latest_skeleton_payload = skeleton_payload
+
                 # 2. Hands presence calculation
                 num_hands = int(obs.left_hand_present) + int(obs.right_hand_present)
                 self.hands_count = num_hands
@@ -614,7 +637,7 @@ class RealtimeVSLRPipeline:
                     self.recent_hand_window.clear()
 
                 recent_motion = 0.0
-                if len(self.recent_hand_window) >= 3:
+                if len(self.recent_hand_window) >= 2:
                     recent_motion = calculate_segment_motion(
                         [x[0] for x in self.recent_hand_window],
                         [x[1] for x in self.recent_hand_window],
@@ -622,14 +645,15 @@ class RealtimeVSLRPipeline:
                     )
 
                 wrist_gate = gesture_activity_from_features(
-                    obs.features, obs.left_hand_present, obs.right_hand_present, wrist_above_hip=0.30
+                    obs.features, obs.left_hand_present, obs.right_hand_present, wrist_above_hip=0.15
                 )
-                # Khi đứng yên (recent_motion < 0.22): giữ nguyên STANDBY, không kích hoạt ghi nhận
-                is_moving = recent_motion >= 0.22
+                is_external_stream = (now - getattr(self, "last_external_frame_time", 0.0)) < 3.0
+                motion_thresh = 0.10 if is_external_stream else 0.22
+                is_moving = recent_motion >= motion_thresh or (is_external_stream and len(self.recent_hand_window) < 3)
                 gesture_active = bool(
                     obs.hands_present
                     and wrist_gate
-                    and (is_moving or (self.in_segment and recent_motion >= 0.14))
+                    and (is_moving or (self.in_segment and recent_motion >= 0.08))
                 )
 
                 if self.rec_mode == "manual":
@@ -1033,6 +1057,7 @@ def create_app(
                     "hands_count": pipeline.hands_count,
                     "in_segment": pipeline.in_segment,
                     "fps": round(pipeline.fps, 1),
+                    "skeleton": getattr(pipeline, "latest_skeleton_payload", None) if pipeline.show_hands else None,
                 }
         return JSONResponse({"status": "error", "detail": "Invalid frame"}, status_code=400)
 
@@ -1053,6 +1078,7 @@ def create_app(
                             "hands": pipeline.hands_count,
                             "in_segment": pipeline.in_segment,
                             "fps": round(pipeline.fps, 1),
+                            "skeleton": getattr(pipeline, "latest_skeleton_payload", None) if pipeline.show_hands else None,
                         })
         except WebSocketDisconnect:
             pass
