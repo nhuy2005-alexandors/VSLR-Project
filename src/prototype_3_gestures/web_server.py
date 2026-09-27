@@ -86,6 +86,48 @@ def calculate_segment_motion(
     return max_motion
 
 
+def is_hand_raised_for_signing(obs: Any, res: Any) -> bool:
+    """Kiểm tra bàn tay có được dơ lên vùng ký hiệu (ngang ngực/mặt) hay không.
+    - Bình thường (tay hạ thấp hoặc không có tay): trả về False -> STANDBY (không nhận diện).
+    - Khi dơ tay lên vùng ký hiệu: trả về True -> Bắt đầu nhận diện ngay lập tức.
+    """
+    if not obs.hands_present:
+        return False
+
+    if res is None:
+        return True
+
+    # 1. Nếu nhận diện được 2 vai từ Pose: tính vùng ngực chuẩn theo tỷ lệ cơ thể
+    if hasattr(res, "pose_landmarks") and res.pose_landmarks:
+        lms = res.pose_landmarks.landmark
+        if len(lms) > 12:
+            vis11 = getattr(lms[11], "visibility", 1.0)
+            vis12 = getattr(lms[12], "visibility", 1.0)
+            if vis11 > 0.35 and vis12 > 0.35:
+                shoulder_y = (lms[11].y + lms[12].y) / 2.0
+                shoulder_span = max(abs(lms[11].x - lms[12].x), 0.12)
+                # Giới hạn dưới của vùng ký hiệu: ngang ngực (dưới đường vai tối đa 0.85 lần bề rộng vai)
+                chest_limit_y = shoulder_y + shoulder_span * 0.85
+
+                for hand_lms in (getattr(res, "left_hand_landmarks", None), getattr(res, "right_hand_landmarks", None)):
+                    if hand_lms and hand_lms.landmark:
+                        wrist_y = hand_lms.landmark[0].y
+                        knuckle_y = hand_lms.landmark[9].y
+                        if min(wrist_y, knuckle_y) < chest_limit_y:
+                            return True
+                return False
+
+    # 2. Dự phòng khi góc camera hẹp: bàn tay phải dơ lên trên (nằm trong 75% phía trên khung hình)
+    for hand_lms in (getattr(res, "left_hand_landmarks", None), getattr(res, "right_hand_landmarks", None)):
+        if hand_lms and hand_lms.landmark:
+            wrist_y = hand_lms.landmark[0].y
+            knuckle_y = hand_lms.landmark[9].y
+            if min(wrist_y, knuckle_y) < 0.75:
+                return True
+
+    return False
+
+
 class RealtimeVSLRPipeline:
     """Core realtime engine bridging OpenCV, MediaPipe Holistic, PyTorch BiLSTM, and VieNeu-TTS."""
 
@@ -109,8 +151,8 @@ class RealtimeVSLRPipeline:
         self.device = torch.device("cuda" if (torch.cuda.is_available() and not is_cloud_env) else "cpu")
         self.model_path = Path(model_path)
         self.confidence_threshold = confidence_threshold
-        self.cooldown = cooldown
-        self.word_gap = word_gap
+        self.cooldown = max(1.0, float(cooldown))
+        self.word_gap = max(0.35, float(word_gap))
         self.sentence_gap = sentence_gap
         self.min_seconds = min_seconds
         self.max_seconds = max_seconds
@@ -190,10 +232,13 @@ class RealtimeVSLRPipeline:
 
         # Bộ lọc chuyển động chống nhận diện nhầm khi người dùng đứng yên
         self.recent_hand_window: deque = deque(maxlen=6)
-        self.min_gesture_motion: float = 0.50
+        self.min_gesture_motion: float = 0.35
+        self.was_hand_raised: bool = False
+        self.waiting_for_next_move: bool = False
+        self.still_since: float | None = None
 
-        # Kích hoạt nhạy sau 0.10s chuyển động (lọc bỏ nhiễu đứng yên 1-2 frame)
-        self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=0.10)
+        # Kích hoạt ngay khi dơ tay lên vùng ký hiệu
+        self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=0.12)
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.event_loop = loop
@@ -630,31 +675,58 @@ class RealtimeVSLRPipeline:
                 num_hands = int(obs.left_hand_present) + int(obs.right_hand_present)
                 self.hands_count = num_hands
 
-                # 3. Gesture tracking state machine (Kết hợp vị trí cổ tay + vận tốc chuyển động thực sự)
+                # 3. Gesture tracking state machine:
+                # - Bình thường (tay hạ thấp / không có tay): STANDBY (không nhận diện)
+                # - Khi vừa dơ tay lên: Bắt đầu nhận diện ngay lập tức
+                # - Khi để tay đứng yên: Tự động dừng và chờ cử động tiếp theo, không đoán bừa
+                hand_raised = is_hand_raised_for_signing(obs, res)
+
                 if obs.hands_present:
                     self.recent_hand_window.append((obs.features, obs.left_hand_present, obs.right_hand_present))
                 else:
                     self.recent_hand_window.clear()
 
                 recent_motion = 0.0
-                if len(self.recent_hand_window) >= 2:
+                if len(self.recent_hand_window) >= 3:
                     recent_motion = calculate_segment_motion(
                         [x[0] for x in self.recent_hand_window],
                         [x[1] for x in self.recent_hand_window],
                         [x[2] for x in self.recent_hand_window],
                     )
 
-                wrist_gate = gesture_activity_from_features(
-                    obs.features, obs.left_hand_present, obs.right_hand_present, wrist_above_hip=0.15
-                )
-                is_external_stream = (now - getattr(self, "last_external_frame_time", 0.0)) < 3.0
-                motion_thresh = 0.10 if is_external_stream else 0.22
-                is_moving = recent_motion >= motion_thresh or (is_external_stream and len(self.recent_hand_window) < 3)
-                gesture_active = bool(
-                    obs.hands_present
-                    and wrist_gate
-                    and (is_moving or (self.in_segment and recent_motion >= 0.08))
-                )
+                if not hand_raised:
+                    self.was_hand_raised = False
+                    self.waiting_for_next_move = False
+                    self.still_since = None
+                    gesture_active = False
+                else:
+                    if not self.was_hand_raised:
+                        # Vừa mới dơ tay lên vùng ký hiệu -> Kích hoạt nhận diện ngay!
+                        self.was_hand_raised = True
+                        self.waiting_for_next_move = False
+                        self.still_since = None
+                        gesture_active = True
+                    elif self.waiting_for_next_move:
+                        # Tay đang để yên trên không -> Chỉ ghi nhận lại khi bắt đầu cử động mới
+                        if recent_motion >= 0.22:
+                            self.waiting_for_next_move = False
+                            self.still_since = None
+                            gesture_active = True
+                        else:
+                            gesture_active = False
+                    else:
+                        if recent_motion < 0.12:
+                            if self.still_since is None:
+                                self.still_since = now
+                            elif (now - self.still_since) >= 0.55:
+                                # Tay đã dừng yên 0.55s -> Chốt đoạn hiện tại và chuyển sang chờ cử động mới
+                                self.waiting_for_next_move = True
+                                gesture_active = False
+                            else:
+                                gesture_active = True
+                        else:
+                            self.still_since = None
+                            gesture_active = True
 
                 if self.rec_mode == "manual":
                     if self.manual_recording:
@@ -684,33 +756,6 @@ class RealtimeVSLRPipeline:
                 self.in_segment = self.tracker.in_segment or self.manual_recording
                 in_gesture = self.in_segment or (done is not None)
                 self.recorder.feed_frame(frame, obs, in_segment=in_gesture, now=now)
-
-                # Dự đoán sớm thời gian thực (Live Preview) chỉ khi thực sự có chuyển động mạnh (>= 0.50)
-                if self.in_segment and done is None and len(self.tracker.segment) >= 10 and (len(self.tracker.segment) % 4 == 0):
-                    try:
-                        live_motion = calculate_segment_motion(
-                            self.tracker.segment,
-                            self.tracker.segment_left,
-                            self.tracker.segment_right,
-                        )
-                        if live_motion >= self.min_gesture_motion:
-                            seg_arr = np.asarray(self.tracker.segment, dtype=np.float32)
-                            prep_live = preprocess_sequence(
-                                seg_arr,
-                                left_hand_present=self.tracker.segment_left,
-                                right_hand_present=self.tracker.segment_right,
-                                timestamps=self.tracker.segment_times if len(self.tracker.segment_times) == len(seg_arr) else None,
-                                target_len=self.seq_len,
-                            )
-                            live_lbl, live_conf, _ = predict_sequence(self.model, prep_live, self.labels, self.device)
-                            if live_conf >= 0.65:
-                                self.broadcast_event({
-                                    "type": "prediction_preview",
-                                    "label": live_lbl,
-                                    "confidence": round(live_conf * 100),
-                                })
-                    except Exception:
-                        pass
 
                 if done is not None:
                     self._handle_segment(done)
