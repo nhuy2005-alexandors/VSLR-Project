@@ -2018,3 +2018,150 @@ kbd {
   50% { opacity: 0.6; transform: scale(0.85); }
 }
 
+/* ==========================================================================
+   10. MOBILE-FIRST RESPONSIVE FIXES (Zero Overlap on Mobile)
+   ========================================================================== */
+
+@media (max-width: 991px) {
+  /* Ẩn hoàn toàn các icon 3D trôi nổi trên mobile/tablet để tránh đè lên camera và chữ */
+  .bg-decorations,
+  .bg-float-icon,
+  .bg-tiles-grid {
+    display: none !important;
+  }
+
+  body {
+    background-image: none !important;
+    background-color: #f1f5f9 !important;
+  }
+
+  /* Navbar thu gọn, thanh lịch trên điện thoại */
+  .navbar-wrapper {
+    width: 100% !important;
+    padding: 0 10px !important;
+    top: 6px !important;
+  }
+
+  .floating-navbar {
+    padding: 10px 14px !important;
+    border-radius: 14px !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+
+  .brand-title {
+    font-size: 15px !important;
+  }
+
+  .nav-links {
+    width: 100% !important;
+    display: flex !important;
+    justify-content: space-around !important;
+    gap: 4px !important;
+  }
+
+  .nav-item {
+    padding: 6px 12px !important;
+    font-size: 12.5px !important;
+    flex: 1 !important;
+    text-align: center !important;
+  }
+
+  /* Màn hình Translate dạng 1 cột (Mobile Stack) không bao giờ bị đè */
+  .translate-container {
+    padding: 10px 0 !important;
+    width: 100% !important;
+  }
+
+  .translation-dual-box {
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
+    width: 100% !important;
+  }
+
+  .trans-card {
+    padding: 14px 16px !important;
+    border-radius: 20px !important;
+    width: 100% !important;
+  }
+
+  .card-column-title {
+    font-size: 20px !important;
+  }
+
+  /* Khung camera 16:9 co giãn tự nhiên theo màn hình, không ép chiều cao */
+  .video-display-area {
+    min-height: 0 !important;
+    max-height: none !important;
+    height: auto !important;
+    aspect-ratio: 16 / 9 !important;
+    width: 100% !important;
+    border-radius: 12px !important;
+  }
+
+  /* Thanh thông số dưới chân camera tự xuống dòng, chữ nhỏ gọn */
+  .cam-hud-bar {
+    font-size: 9.5px !important;
+    flex-wrap: wrap !important;
+    gap: 3px 6px !important;
+    padding: 4px 6px !important;
+    bottom: 4px !important;
+    left: 4px !important;
+    right: 4px !important;
+  }
+
+  /* Các nút điều khiển camera thành từng hàng dễ bấm bằng ngón tay */
+  .video-sub-controls {
+    flex-direction: column !important;
+    gap: 8px !important;
+    margin-top: 10px !important;
+  }
+
+  .video-sub-controls .pill-toggle-btn {
+    width: 100% !important;
+    padding: 10px 14px !important;
+    font-size: 13px !important;
+  }
+
+  /* Khung hiển thị chữ dự đoán trên điện thoại */
+  .predicted-text-area {
+    min-height: 160px !important;
+    max-height: 220px !important;
+    padding: 16px !important;
+  }
+
+  .predicted-word-hero {
+    font-size: 38px !important;
+  }
+
+  /* Nút bấm dịch lớn dưới cùng tràn viền mobile */
+  .btn-big-toggle {
+    width: 100% !important;
+    padding: 14px 20px !important;
+    font-size: 16px !important;
+  }
+
+  /* Thanh nhập tên người thử nghiệm */
+  .signer-bar-card {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+    padding: 12px 14px !important;
+  }
+
+  .signer-input-wrap {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+
+  .signer-name-input {
+    max-width: none !important;
+    width: 100% !important;
+  }
+
+  .signer-storage-status {
+    font-size: 11.5px !important;
+    justify-content: flex-start !important;
+  }
+}
+

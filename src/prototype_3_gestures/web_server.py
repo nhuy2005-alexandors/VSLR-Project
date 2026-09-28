@@ -202,7 +202,9 @@ class RealtimeVSLRPipeline:
         self.event_subscribers: list[asyncio.Queue] = []
         self.event_loop: asyncio.AbstractEventLoop | None = None
 
-        self.min_gesture_motion: float = 0.20
+        # Bộ lọc chuyển động và bắt đầu cử chỉ từ trạng thái đứng yên
+        self.raw_hand_history: deque = deque(maxlen=4)
+        self.still_since: float | None = None
 
         # Kích hoạt 0ms tức thì khi dơ tay lên (min_active_seconds=0.0)
         self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=0.0)
@@ -380,14 +382,15 @@ class RealtimeVSLRPipeline:
             self.recorder.cancel_gesture()
             return
 
-        # Kiểm tra biên độ chuyển động thực sự của bàn tay (chặn đứng yên bị dịch nhầm 'Bạn quê ở đâu')
+        # Kiểm tra biên độ chuyển động thực sự của bàn tay (triệt tiêu hoàn toàn lỗi đứng yên bị dịch bừa 'Bạn quê ở đâu')
         if not self.rec_mode == "manual":
             seg_motion = calculate_segment_motion(
                 segment.features,
                 segment.left_hand_present,
                 segment.right_hand_present,
             )
-            if seg_motion < self.min_gesture_motion:
+            if seg_motion < 0.35:
+                print(f"[STANDSTILL IGNORED] Tay đứng yên (biên độ: {seg_motion:.2f} < 0.35), hủy bỏ không đoán.")
                 self.recorder.cancel_gesture()
                 return
 
@@ -638,13 +641,56 @@ class RealtimeVSLRPipeline:
                 num_hands = int(obs.left_hand_present) + int(obs.right_hand_present)
                 self.hands_count = num_hands
 
-                # 3. Gesture tracking state machine (Chuẩn VSLR nguyên bản đạt 90.97% accuracy):
-                # - Kích hoạt khi cổ tay nhấc lên vùng hoạt động (wrist_above_hip=0.15)
-                # - Tay hạ xuống hoặc không có tay -> STANDBY (0% nhận diện)
-                wrist_gate = gesture_activity_from_features(
-                    obs.features, obs.left_hand_present, obs.right_hand_present, wrist_above_hip=0.15
-                )
-                gesture_active = bool(obs.hands_present and wrist_gate)
+                # 3. Gesture tracking state machine:
+                # - Khi tay đứng yên: gesture_active = False -> STANDBY (không bao giờ bắt đầu cử chỉ)
+                # - Ngay khi tay dơ lên / bắt đầu chuyển động: gesture_active = True -> BẮT ĐẦU GHI NGAY
+                current_raw_pts = extract_raw_hand_coords(res)
+                gesture_active = False
+
+                if current_raw_pts:
+                    self.raw_hand_history.append((now, current_raw_pts))
+                    recent_dist = 0.0
+                    recent_upward = 0.0
+
+                    if len(self.raw_hand_history) >= 2:
+                        _, p0 = self.raw_hand_history[0]
+                        _, p1 = self.raw_hand_history[-1]
+                        if len(p0) == len(p1) and len(p0) > 0:
+                            diff = np.asarray(p1) - np.asarray(p0)
+                            recent_dist = float(np.max(np.linalg.norm(diff, axis=1)))
+                            recent_upward = float(np.max(np.asarray(p0)[:, 1] - np.asarray(p1)[:, 1]))
+                        else:
+                            recent_dist = 0.03
+                            recent_upward = 0.03
+
+                    # Đưa tay lên (recent_upward >= 0.012) hoặc bắt đầu di chuyển (recent_dist >= 0.016)
+                    hand_is_moving = (recent_upward >= 0.012) or (recent_dist >= 0.016)
+
+                    if not self.in_segment:
+                        # Ở STANDBY: Chỉ kích hoạt khi tay có sự thay đổi đưa lên / bắt đầu làm động tác
+                        if hand_is_moving:
+                            gesture_active = True
+                            self.still_since = None
+                        else:
+                            gesture_active = False
+                    else:
+                        # Đang trong cử chỉ: Tiếp tục ghi nếu tay còn di chuyển
+                        if recent_dist >= 0.009:
+                            gesture_active = True
+                            self.still_since = None
+                        else:
+                            if self.still_since is None:
+                                self.still_since = now
+                                gesture_active = True
+                            elif (now - self.still_since) >= 0.35:
+                                # Tay đã dừng yên 0.35s sau động tác -> Chốt cử chỉ
+                                gesture_active = False
+                            else:
+                                gesture_active = True
+                else:
+                    self.raw_hand_history.clear()
+                    self.still_since = None
+                    gesture_active = False
 
                 if self.rec_mode == "manual":
                     if self.manual_recording:
