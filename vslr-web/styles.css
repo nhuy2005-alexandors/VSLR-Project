@@ -787,22 +787,13 @@ button {
   50% { opacity: 0.85; }
 }
 
-/* MediaPipe Hands Canvas Overlay (Mirrored with video) */
+/* MediaPipe Hands Canvas Overlay (Tắt hoàn toàn khung xương trên Web theo yêu cầu) */
 #handLandmarkCanvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  pointer-events: none;
-  z-index: 6;
-  transform: scaleX(-1);
-  display: none;
+  display: none !important;
 }
 
 #handLandmarkCanvas.active {
-  display: block;
+  display: none !important;
 }
 
 /* Camera fallback overlay */
@@ -2047,6 +2038,71 @@ kbd {
    10. MOBILE-FIRST RESPONSIVE FIXES (Zero Overlap on Mobile)
    ========================================================================== */
 
+/* ==========================================================================
+   10. FULL-WIDTH CAMERA STUDIO & LIVE PREDICTION OVERLAY
+   ========================================================================== */
+
+.single-column-studio {
+  grid-template-columns: 1fr !important;
+  width: 100% !important;
+  max-width: 1100px !important;
+  margin: 0 auto 20px !important;
+}
+
+.single-column-studio .video-card {
+  width: 100% !important;
+}
+
+.single-column-studio .video-display-area {
+  aspect-ratio: 16 / 9;
+  min-height: 520px;
+  max-height: 680px;
+}
+
+/* Subtitle / Live Predicted Text Overlay Floating Inside Camera Viewport */
+.cam-prediction-overlay {
+  position: absolute;
+  bottom: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1.5px solid rgba(56, 189, 248, 0.55);
+  border-radius: 22px;
+  padding: 8px 28px;
+  text-align: center;
+  z-index: 12;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 24px rgba(56, 189, 248, 0.25);
+  pointer-events: none;
+  max-width: 90%;
+  min-width: 240px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cam-prediction-overlay .predicted-word-hero {
+  font-family: var(--font-heading);
+  font-size: 38px;
+  font-weight: 800;
+  color: #38bdf8;
+  text-shadow: 0 2px 12px rgba(56, 189, 248, 0.4);
+  margin: 0;
+  line-height: 1.15;
+  letter-spacing: -0.5px;
+}
+
+.cam-prediction-overlay .predicted-conf-inline {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: #94a3b8;
+  margin-top: 3px;
+}
+
+.cam-prediction-overlay .conf-val {
+  color: #38bdf8;
+  font-weight: 700;
+}
+
 @media (max-width: 991px) {
   /* Ẩn hoàn toàn các icon 3D trôi nổi trên mobile/tablet để tránh đè lên camera và chữ */
   .bg-decorations,
@@ -2092,7 +2148,6 @@ kbd {
     text-align: center !important;
   }
 
-  /* Màn hình Translate dạng 1 cột (Mobile Stack) không bao giờ bị đè */
   .translate-container {
     padding: 10px 0 !important;
     width: 100% !important;
@@ -2100,42 +2155,57 @@ kbd {
 
   .translation-dual-box {
     grid-template-columns: 1fr !important;
-    gap: 16px !important;
+    gap: 14px !important;
     width: 100% !important;
   }
 
   .trans-card {
-    padding: 14px 16px !important;
-    border-radius: 20px !important;
+    padding: 12px 14px !important;
+    border-radius: 18px !important;
     width: 100% !important;
   }
 
   .card-column-title {
-    font-size: 20px !important;
+    font-size: 18px !important;
   }
 
-  /* Khung camera 16:9 co giãn tự nhiên theo màn hình, không ép chiều cao */
-  .video-display-area {
-    min-height: 0 !important;
-    max-height: none !important;
-    height: auto !important;
-    aspect-ratio: 16 / 9 !important;
+  /* Khung Camera Full Màn hình điện thoại (chiếm ~65vh chiều cao màn hình) */
+  .single-column-studio .video-display-area {
+    min-height: 60vh !important;
+    max-height: 72vh !important;
+    height: 65vh !important;
+    aspect-ratio: auto !important;
     width: 100% !important;
-    border-radius: 12px !important;
+    border-radius: 14px !important;
   }
 
-  /* Thanh thông số dưới chân camera tự xuống dòng, chữ nhỏ gọn */
+  .cam-prediction-overlay {
+    bottom: 38px !important;
+    padding: 6px 16px !important;
+    width: 90% !important;
+    min-width: 0 !important;
+  }
+
+  .cam-prediction-overlay .predicted-word-hero {
+    font-size: 30px !important;
+  }
+
+  .cam-prediction-overlay .predicted-conf-inline {
+    font-size: 10px !important;
+  }
+
+  /* Thanh thông số dưới chân camera nhỏ gọn */
   .cam-hud-bar {
-    font-size: 9.5px !important;
+    font-size: 9px !important;
     flex-wrap: wrap !important;
-    gap: 3px 6px !important;
-    padding: 4px 6px !important;
-    bottom: 4px !important;
-    left: 4px !important;
-    right: 4px !important;
+    gap: 2px 6px !important;
+    padding: 3px 6px !important;
+    bottom: 3px !important;
+    left: 3px !important;
+    right: 3px !important;
   }
 
-  /* Các nút điều khiển camera thành từng hàng dễ bấm bằng ngón tay */
+  /* Nút bấm điều khiển camera to dễ bấm ngón tay */
   .video-sub-controls {
     flex-direction: column !important;
     gap: 8px !important;
@@ -2144,26 +2214,8 @@ kbd {
 
   .video-sub-controls .pill-toggle-btn {
     width: 100% !important;
-    padding: 10px 14px !important;
-    font-size: 13px !important;
-  }
-
-  /* Khung hiển thị chữ dự đoán trên điện thoại */
-  .predicted-text-area {
-    min-height: 160px !important;
-    max-height: 220px !important;
-    padding: 16px !important;
-  }
-
-  .predicted-word-hero {
-    font-size: 38px !important;
-  }
-
-  /* Nút bấm dịch lớn dưới cùng tràn viền mobile */
-  .btn-big-toggle {
-    width: 100% !important;
-    padding: 14px 20px !important;
-    font-size: 16px !important;
+    padding: 11px 14px !important;
+    font-size: 14px !important;
   }
 
   /* Thanh nhập tên người thử nghiệm */

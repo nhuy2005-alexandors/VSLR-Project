@@ -516,10 +516,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Vẽ khung xương trực tiếp (0ms delay)
-    if (res.skeleton !== undefined) {
-      drawSkeletonOverlay(res.skeleton);
-    }
+    // Tắt vẽ khung xương trên giao diện web theo yêu cầu (tiết kiệm CPU & gọn gàng)
+    // if (res.skeleton !== undefined) { drawSkeletonOverlay(res.skeleton); }
 
     // Cập nhật kết quả dự đoán và phát âm thanh ngay lập tức
     if (res.decision && res.decision.seq && res.decision.seq > lastSeenDecisionSeq) {
@@ -569,7 +567,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const jpegQuality = isFastNetwork ? 0.65 : 0.50;
 
     const pumpNextFrame = () => {
-      if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended || isSending) return;
+      if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended || !state.isRecognizing || isSending) return;
       // Chống lặp frame: chỉ gửi khi camera đã render frame mới thực sự
       if (liveVideo.currentTime === lastVideoTime && lastVideoTime > 0) return;
       lastVideoTime = liveVideo.currentTime;

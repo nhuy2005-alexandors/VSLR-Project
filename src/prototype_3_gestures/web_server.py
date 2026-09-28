@@ -426,7 +426,7 @@ class RealtimeVSLRPipeline:
         self.new_ai_frame_event = threading.Event()
         self.latest_results: Any = None
 
-        self.show_hands = True
+        self.show_hands = False
         self.rec_mode = "auto"  # 'auto' or 'manual'
         self.manual_recording = False
         self.manual_rec_start = 0.0

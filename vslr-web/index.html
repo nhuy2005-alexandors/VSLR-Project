@@ -98,23 +98,17 @@
           </div>
         </div>
 
-        <!-- Dual Columns: Video Output & Predicted Text (Exact Screenshot 3 Layout) -->
-        <div class="translation-dual-box">
-          
-          <!-- Column 1: Video Output (Primary Focus - YouTube Style) -->
+        <!-- Full-Width Camera Studio (Predicted Text Overlay Inside Camera) -->
+        <div class="translation-dual-box single-column-studio">
+
           <div class="trans-card video-card">
             <div class="card-column-header">
-              <h2 class="card-column-title">Video Output</h2>
-              <button class="btn-theater-mode" id="btnToggleTheater" title="Phóng to Video toàn màn hình giống YouTube (Phím T)">
-                <span class="theater-icon">⛶</span> Rạp chiếu (T)
-              </button>
+              <h2 class="card-column-title">Camera Nhận Diện</h2>
             </div>
-            
+
             <div class="video-display-area" id="cameraViewport">
-              <!-- Backend Live Stream (Ultra fast, native MediaPipe Holistic C++, 0-lag) -->
               <img id="liveStreamImg" src="" alt="VSLR Realtime Stream" style="display:none;">
               <video id="liveVideo" autoplay playsinline muted style="display:none;"></video>
-              <canvas id="handLandmarkCanvas" style="display:none;"></canvas>
 
               <!-- Standby screen when Webcam is OFF -->
               <div class="cam-standby-screen" id="camStandbyScreen">
@@ -127,16 +121,24 @@
                   </svg>
                 </div>
                 <h3 class="standby-title">Webcam đang TẮT</h3>
-                <p class="standby-desc">Hệ thống đang ở chế độ chờ. Hãy bật webcam để kết nối camera và bắt đầu nhận diện cử chỉ thời gian thực.</p>
+                <p class="standby-desc">Hãy bật webcam để kiểm tra góc máy, sau đó nhấn [BẮT ĐẦU NHẬN DIỆN] khi đã sẵn sàng.</p>
                 <button class="btn-pill-primary btn-start-cam-hero" id="btnHeroStartCam">
-                  ▶ BẬT WEBCAM NHẬN DIỆN (W)
+                  ▶ BẬT WEBCAM (W)
                 </button>
               </div>
 
-              <!-- Rec Indicator Overlay (Matching Terminal Status) -->
+              <!-- Rec Indicator Overlay (Top-Left) -->
               <div class="rec-status-tag" id="recStatusTag" style="display:none;">
                 <span class="rec-blink"></span>
-                <span id="recStatusText">SẴN SÀNG (SPACE)</span>
+                <span id="recStatusText">⚪ ĐÃ BẬT CAMERA</span>
+              </div>
+
+              <!-- Live Predicted Text Overlay (Inside Webcam Viewport) -->
+              <div class="cam-prediction-overlay" id="camPredictionOverlay">
+                <div class="predicted-word-hero" id="heroPredictedWord">---</div>
+                <div class="predicted-conf-inline">
+                  Confidence: <span class="conf-val" id="predConfVal">--%</span>
+                </div>
               </div>
 
               <!-- Camera Start Prompt -->
@@ -151,12 +153,11 @@
                 <button class="btn-sm btn-primary-blue" id="btnStartRealCam">Kết nối lại Camera</button>
               </div>
 
-              <!-- Realtime FPS / Feature HUD -->
+              <!-- Realtime FPS / Feature HUD (Bottom) -->
               <div class="cam-hud-bar">
                 <span>FPS: <strong id="hudFpsVal">0.0</strong></span>
                 <span>Camera: <strong id="hudCamStatus">Chờ bật (Tắt)</strong></span>
                 <span>Hands: <strong id="hudHandsStatus">0 tay</strong></span>
-                <span>Model: <strong>BiLSTM (24 cls)</strong></span>
                 <span>Voice: <strong id="hudVoiceStatus">Trúc Ly (48kHz)</strong></span>
               </div>
             </div>
@@ -166,51 +167,27 @@
               <button class="pill-toggle-btn btn-webcam-toggle" id="btnToggleCamera" title="Phím tắt: W">📷 Webcam: TẮT (W)</button>
               <button class="pill-toggle-btn btn-recognize-toggle" id="btnToggleRecognize" title="Bắt đầu / Tạm dừng nhận diện cử chỉ (Phím SPACE)">▶ BẮT ĐẦU NHẬN DIỆN (SPACE)</button>
             </div>
-          </div>
 
-          <!-- Column 2: Predicted Text (Matching Deep Navy/Indigo Box in Screenshot 3) -->
-          <div class="trans-card predicted-card">
-            <h2 class="card-column-title">Predicted Text</h2>
-            
-            <div class="predicted-text-area">
-              <div class="predicted-word-hero" id="heroPredictedWord">
-                ---
+            <!-- Compact Sentence & History Row directly below controls -->
+            <div class="sentence-bubble-row">
+              <div class="sentence-header">
+                <span class="sentence-lbl">Câu thoại đã dịch:</span>
+                <div class="d-flex gap-2">
+                  <button class="btn-tts-speak btn-sm py-1 px-3" id="btnSpeakSentence" title="Phím tắt: S">🔊 Phát âm (S)</button>
+                  <button class="btn-clear-sentence" id="btnClearSentence" title="Phím tắt: C">Xóa câu (C)</button>
+                </div>
               </div>
-              <div class="predicted-conf-bar" id="predConfBarWrap">
-                <span class="conf-lbl">Confidence:</span>
-                <span class="conf-val" id="predConfVal">--%</span>
+              <div class="sentence-words-box" id="sentenceWordsBox">
+                <span class="empty-hint">Chưa có từ nào... (Bật Webcam và nhấn [BẮT ĐẦU NHẬN DIỆN] để dịch cử chỉ)</span>
               </div>
             </div>
 
             <!-- Recent Recognized History Strip -->
             <div class="recent-history-row">
-              <span class="recent-lbl">Lịch sử nhận diện:</span>
+              <span class="recent-lbl">Lịch sử nhận diện gần đây:</span>
               <div class="recent-tags-box" id="recentTagsBox">
-                <span class="recent-hint">Sẵn sàng nhận diện cử chỉ...</span>
+                <span class="recent-hint">Sẵn sàng...</span>
               </div>
-            </div>
-
-            <!-- Sentence Construction Buffer -->
-            <div class="sentence-bubble-row">
-              <div class="sentence-header">
-                <span class="sentence-lbl">Câu thoại tự nhiên (Sentence):</span>
-                <button class="btn-clear-sentence" id="btnClearSentence" title="Phím tắt: C">Xóa câu (C)</button>
-              </div>
-              <div class="sentence-words-box" id="sentenceWordsBox">
-                <span class="empty-hint">Chưa có từ nào... (Nhấn SPACE hoặc [BẮT ĐẦU GHI] để dịch cử chỉ)</span>
-              </div>
-            </div>
-
-            <!-- Speak Audio Row -->
-            <div class="tts-speak-row">
-              <button class="btn-tts-speak" id="btnSpeakSentence" title="Phím tắt: S">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                </svg>
-                Phát âm tiếng Việt (S)
-              </button>
-              <span class="hotkey-hint">Phím tắt: <kbd>W</kbd> Webcam | <kbd>SPACE</kbd> Ghi/Dừng | <kbd>M</kbd> Chế độ | <kbd>H</kbd> Khung xương | <kbd>S</kbd> Đọc | <kbd>C</kbd> Xóa</span>
             </div>
 
           </div>
