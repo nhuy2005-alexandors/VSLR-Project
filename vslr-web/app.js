@@ -359,7 +359,7 @@ document.addEventListener('DOMContentLoaded', () => {
       state.cameraEnabled = true;
       updateCameraStateUI();
       startFrameStreamingLoop();
-      triggerBackendAction('start_camera');
+      triggerBackendAction('start_camera&client_mode=true');
     } catch (err) {
       console.error("Không thể mở Webcam trình duyệt:", err);
       alert("Vui lòng cấp quyền truy cập Webcam trên trình duyệt để nhận diện!");
@@ -405,6 +405,50 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  let lastSeenDecisionSeq = 0;
+
+  function handleClientTelemetry(res) {
+    if (!res) return;
+    if (hudFpsVal && res.fps) {
+      hudFpsVal.textContent = res.fps.toFixed(1);
+    }
+    if (hudHandsStatus && typeof res.hands !== 'undefined') {
+      hudHandsStatus.textContent = `${res.hands} tay`;
+      hudHandsStatus.style.color = res.hands > 0 ? '#38bdf8' : '#94a3b8';
+    }
+    if (hudCamStatus && res.camera) {
+      hudCamStatus.textContent = res.camera;
+    }
+
+    // Cập nhật trạng thái GHI CỬ CHỈ (màu đỏ nhấp nháy) vs SẴN SÀNG
+    if (res.in_segment) {
+      recStatusTag?.classList.add('active');
+      if (recStatusText) recStatusText.textContent = 'ĐANG GHI CỬ CHỈ...';
+      if (btnMainToggleTranslate) {
+        btnMainToggleTranslate.textContent = '[# DỪNG & DỊCH (SPACE)]';
+        btnMainToggleTranslate.classList.add('stopping');
+      }
+    } else {
+      recStatusTag?.classList.remove('active');
+      if (recStatusText) recStatusText.textContent = 'SẴN SÀNG (SPACE)';
+      if (btnMainToggleTranslate) {
+        btnMainToggleTranslate.textContent = '[> BẮT ĐẦU GHI (SPACE)]';
+        btnMainToggleTranslate.classList.remove('stopping');
+      }
+    }
+
+    // Vẽ khung xương trực tiếp (0ms delay)
+    if (res.skeleton !== undefined) {
+      drawSkeletonOverlay(res.skeleton);
+    }
+
+    // Cập nhật kết quả dự đoán và phát âm thanh ngay lập tức
+    if (res.decision && res.decision.seq && res.decision.seq > lastSeenDecisionSeq) {
+      lastSeenDecisionSeq = res.decision.seq;
+      handleBackendEvent(res.decision);
+    }
+  }
+
   function startFrameStreamingLoop() {
     if (state.clientFrameTimer) clearInterval(state.clientFrameTimer);
     const isFastNetwork = isDirectTunnel || API_BASE.includes('.trycloudflare.com') || isLocalPC;
@@ -414,7 +458,8 @@ document.addEventListener('DOMContentLoaded', () => {
     frameCanvas.width = isFastNetwork ? 480 : 320;
     frameCanvas.height = isFastNetwork ? 360 : 240;
     const ctx = frameCanvas.getContext('2d');
-    let inFlight = 0;
+    let isSending = false;
+    let wsSafetyTimeout = null;
 
     // 1. Mở kết nối WebSocket tốc độ cao tới Backend
     try {
@@ -426,67 +471,54 @@ document.addEventListener('DOMContentLoaded', () => {
       clientWs = new WebSocket(wsUrl);
       clientWs.binaryType = 'arraybuffer';
       clientWs.onmessage = (evt) => {
+        isSending = false;
+        clearTimeout(wsSafetyTimeout);
         try {
           const res = JSON.parse(evt.data);
-          if (res && hudFpsVal && res.fps) {
-            hudFpsVal.textContent = res.fps.toFixed(1);
-          }
-          if (res && hudHandsStatus && typeof res.hands !== 'undefined') {
-            hudHandsStatus.textContent = `${res.hands} tay`;
-            hudHandsStatus.style.color = res.hands > 0 ? '#38bdf8' : '#94a3b8';
-          }
-          if (res && res.skeleton !== undefined) {
-            drawSkeletonOverlay(res.skeleton);
-          }
+          handleClientTelemetry(res);
         } catch (err) {}
       };
     } catch (e) {
       clientWs = null;
     }
 
-    // 2. Vòng lặp truyền frame: Cloudflare Tunnel chạy 25 FPS (40ms), Hugging Face chạy 16 FPS (60ms)
-    const streamInterval = isFastNetwork ? 40 : 60;
+    // 2. Vòng lặp truyền frame Lock-Step (chống ứ đọng buffer: chỉ chụp và gửi khi server đã nhận xong frame trước)
+    const streamInterval = isFastNetwork ? 35 : 55;
     const jpegQuality = isFastNetwork ? 0.65 : 0.50;
 
-    state.clientFrameTimer = setInterval(() => {
-      if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended) return;
+    const pumpNextFrame = () => {
+      if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended || isSending) return;
+      isSending = true;
       try {
         ctx.drawImage(liveVideo, 0, 0, frameCanvas.width, frameCanvas.height);
         frameCanvas.toBlob((blob) => {
-          if (!blob) return;
+          if (!blob) { isSending = false; return; }
 
-          // Ưu tiên 1: Gửi qua WebSocket nếu kết nối sẵn sàng (0ms overhead)
-          if (clientWs && clientWs.readyState === WebSocket.OPEN && clientWs.bufferedAmount < 65536) {
+          // Ưu tiên 1: Gửi qua WebSocket (0ms latency, không buffer)
+          if (clientWs && clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(blob);
+            clearTimeout(wsSafetyTimeout);
+            wsSafetyTimeout = setTimeout(() => { isSending = false; }, 200);
             return;
           }
 
-          // Ưu tiên 2: HTTP/2 Pipelined Multiplexing (cho phép tối đa 4 request song song)
-          if (inFlight >= 4) return;
-          inFlight++;
+          // Ưu tiên 2: HTTP Fallback
           fetch(`${API_BASE}/api/client_frame?signer=${encodeURIComponent(state.signerName || 'Khách')}`, {
             method: 'POST',
             body: blob,
             headers: { 'Content-Type': 'image/jpeg' }
           })
           .then(r => r.json())
-          .then(res => {
-            if (res && hudFpsVal && res.fps) {
-              hudFpsVal.textContent = res.fps.toFixed(1);
-            }
-            if (res && hudHandsStatus && typeof res.hands_count !== 'undefined') {
-              hudHandsStatus.textContent = `${res.hands_count} tay`;
-              hudHandsStatus.style.color = res.hands_count > 0 ? '#38bdf8' : '#94a3b8';
-            }
-            if (res && res.skeleton !== undefined) {
-              drawSkeletonOverlay(res.skeleton);
-            }
-          })
+          .then(res => { handleClientTelemetry(res); })
           .catch(() => {})
-          .finally(() => { inFlight = Math.max(0, inFlight - 1); });
+          .finally(() => { isSending = false; });
         }, 'image/jpeg', jpegQuality);
-      } catch (e) {}
-    }, streamInterval);
+      } catch (e) {
+        isSending = false;
+      }
+    };
+
+    state.clientFrameTimer = setInterval(pumpNextFrame, streamInterval);
   }
 
   // Phím bấm giao diện

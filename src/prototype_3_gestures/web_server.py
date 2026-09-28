@@ -190,6 +190,7 @@ class RealtimeVSLRPipeline:
         self.in_segment = False
         self.hands_count = 0
         self.latest_decision: dict[str, Any] = {}
+        self.decision_seq: int = 0
 
         # Frame cache for MJPEG streaming
         self.latest_jpeg: bytes | None = None
@@ -201,13 +202,10 @@ class RealtimeVSLRPipeline:
         self.event_subscribers: list[asyncio.Queue] = []
         self.event_loop: asyncio.AbstractEventLoop | None = None
 
-        # Bộ lọc chuyển động và phát hiện đưa tay lên từ vị trí đứng yên
-        self.raw_hand_history: deque = deque(maxlen=4)
-        self.min_gesture_motion: float = 0.28
-        self.still_since: float | None = None
+        self.min_gesture_motion: float = 0.20
 
-        # Kích hoạt nhạy 0.10s khi bắt đầu chuyển động đưa tay lên
-        self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=0.10)
+        # Kích hoạt 0ms tức thì khi dơ tay lên (min_active_seconds=0.0)
+        self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=0.0)
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.event_loop = loop
@@ -250,7 +248,23 @@ class RealtimeVSLRPipeline:
         self.tts_mgr.stop()
         print(f"[Pipeline] Đã dừng toàn bộ pipeline.")
 
-    def start_camera(self) -> bool:
+    def start_camera(self, client_mode: bool = False) -> bool:
+        if client_mode:
+            self.camera_enabled = True
+            self.current_camera_idx = -1
+            self.current_camera_name = "Webcam Trình duyệt (Live)"
+            self.tracker.reset()
+            self.in_segment = False
+            self.hands_count = 0
+            self.broadcast_event({
+                "type": "camera_state",
+                "enabled": True,
+                "index": -1,
+                "name": self.current_camera_name,
+                "client_mode": True,
+            })
+            return True
+
         if self.camera_enabled and self.cap is not None and self.cap.isOpened():
             return True
         ok = self._init_camera(self.requested_camera)
@@ -290,6 +304,8 @@ class RealtimeVSLRPipeline:
         if signer and signer.strip():
             self.current_signer = signer.strip()
         self.camera_enabled = True
+        self.current_camera_idx = -1
+        self.current_camera_name = "Webcam Trình duyệt (Live)"
         self.last_external_frame_time = time.monotonic()
         with self.ai_frame_lock:
             self.ai_input_frame = frame
@@ -397,6 +413,7 @@ class RealtimeVSLRPipeline:
             self.last_saved_info = f"Đã lưu video: {decision.label} [{status_desc}]"
             self.last_saved_time = time.monotonic()
 
+        self.decision_seq += 1
         now_seg = time.monotonic()
         conf_pct = round(decision.confidence * 100)
 
@@ -417,6 +434,8 @@ class RealtimeVSLRPipeline:
             print(f"[WORD RECOGNIZED] ({self.current_signer}) -> {decision.label} ({conf_pct}%) | Câu: {' '.join(self.sentence)}")
 
             self.latest_decision = {
+                "seq": self.decision_seq,
+                "type": "prediction",
                 "label": decision.label,
                 "confidence": conf_pct,
                 "accepted": True,
@@ -425,15 +444,7 @@ class RealtimeVSLRPipeline:
                 "signer": self.current_signer,
             }
 
-            self.broadcast_event({
-                "type": "prediction",
-                "label": decision.label,
-                "confidence": conf_pct,
-                "accepted": True,
-                "reason": "",
-                "sentence": list(self.sentence),
-                "signer": self.current_signer,
-            })
+            self.broadcast_event(self.latest_decision)
 
             # Auto-speak current word nếu không phải môi trường Cloud / Headless
             if not os.environ.get("SPACE_ID"):
@@ -443,13 +454,7 @@ class RealtimeVSLRPipeline:
             self.last_accepted_label = None
             print(f"[REJECT] ({self.current_signer}) -> {decision.label} ({conf_pct}%) — {decision.reason}")
             self.latest_decision = {
-                "label": decision.label,
-                "confidence": conf_pct,
-                "accepted": False,
-                "reason": decision.reason,
-                "signer": self.current_signer,
-            }
-            self.broadcast_event({
+                "seq": self.decision_seq,
                 "type": "prediction",
                 "label": decision.label,
                 "confidence": conf_pct,
@@ -457,7 +462,8 @@ class RealtimeVSLRPipeline:
                 "reason": decision.reason,
                 "sentence": list(self.sentence),
                 "signer": self.current_signer,
-            })
+            }
+            self.broadcast_event(self.latest_decision)
 
     def speak_sentence_now(self) -> None:
         if not self.sentence:
@@ -644,56 +650,13 @@ class RealtimeVSLRPipeline:
                 num_hands = int(obs.left_hand_present) + int(obs.right_hand_present)
                 self.hands_count = num_hands
 
-                # 3. Gesture tracking state machine (Phát hiện sự thay đổi vị trí đưa tay lên từ đứng yên):
-                # - Khi tay đang đứng yên (ở bất kỳ vị trí nào): STANDBY (không nhận diện)
-                # - Ngay khi tay có sự thay đổi đưa lên hoặc bắt đầu cử động: Bắt đầu nhận diện ngay lập tức
-                current_raw_pts = extract_raw_hand_coords(res)
-                gesture_active = False
-
-                if current_raw_pts:
-                    self.raw_hand_history.append((now, current_raw_pts))
-                    max_dist = 0.0
-                    max_upward = 0.0
-
-                    if len(self.raw_hand_history) >= 2:
-                        _, pts0 = self.raw_hand_history[0]
-                        _, pts1 = self.raw_hand_history[-1]
-                        if len(pts0) == len(pts1) and len(pts0) > 0:
-                            diff = np.asarray(pts1) - np.asarray(pts0)
-                            max_dist = float(np.max(np.linalg.norm(diff, axis=1)))
-                            max_upward = float(np.max(np.asarray(pts0)[:, 1] - np.asarray(pts1)[:, 1]))
-                        else:
-                            max_dist = 0.03
-                            max_upward = 0.03
-
-                    # Phát hiện sự thay đổi đưa tay lên (max_upward >= 0.014) hoặc dịch chuyển (max_dist >= 0.020)
-                    hand_is_moving = max_upward >= 0.014 or max_dist >= 0.020
-
-                    if not self.in_segment:
-                        # Khi đang ở STANDBY: Chỉ kích hoạt khi tay có sự thay đổi đưa lên / chuyển động
-                        if hand_is_moving:
-                            gesture_active = True
-                            self.still_since = None
-                        else:
-                            gesture_active = False
-                    else:
-                        # Khi đang trong quá trình ghi cử chỉ:
-                        if max_dist >= 0.012:
-                            gesture_active = True
-                            self.still_since = None
-                        else:
-                            if self.still_since is None:
-                                self.still_since = now
-                                gesture_active = True
-                            elif (now - self.still_since) >= 0.35:
-                                # Tay đã dừng yên 0.35s sau cử chỉ -> Chốt đoạn cử chỉ để dịch
-                                gesture_active = False
-                            else:
-                                gesture_active = True
-                else:
-                    self.raw_hand_history.clear()
-                    self.still_since = None
-                    gesture_active = False
+                # 3. Gesture tracking state machine (Chuẩn VSLR nguyên bản đạt 90.97% accuracy):
+                # - Kích hoạt khi cổ tay nhấc lên vùng hoạt động (wrist_above_hip=0.15)
+                # - Tay hạ xuống hoặc không có tay -> STANDBY (0% nhận diện)
+                wrist_gate = gesture_activity_from_features(
+                    obs.features, obs.left_hand_present, obs.right_hand_present, wrist_above_hip=0.15
+                )
+                gesture_active = bool(obs.hands_present and wrist_gate)
 
                 if self.rec_mode == "manual":
                     if self.manual_recording:
@@ -892,10 +855,10 @@ def create_app(
 
     # 3. Action API (Space, Clear, Speak, Toggle Hands, Toggle Mode, Start/Stop Camera)
     @app.post("/api/action")
-    async def trigger_action(action: str = Query(...)):
+    async def trigger_action(action: str = Query(...), client_mode: bool = Query(False)):
         cmd = action.lower().strip()
         if cmd == "start_camera":
-            ok = pipeline.start_camera()
+            ok = pipeline.start_camera(client_mode=client_mode)
             return {"status": "ok", "action": "start_camera", "camera_enabled": ok}
         elif cmd == "stop_camera":
             pipeline.stop_camera()
@@ -1066,10 +1029,15 @@ def create_app(
                 pipeline.inject_external_frame(frame, signer=signer)
                 return {
                     "status": "ok",
-                    "hands_count": pipeline.hands_count,
+                    "hands": pipeline.hands_count,
                     "in_segment": pipeline.in_segment,
                     "fps": round(pipeline.fps, 1),
+                    "camera": pipeline.current_camera_name,
+                    "camera_enabled": pipeline.camera_enabled,
+                    "rec_mode": pipeline.rec_mode,
                     "skeleton": getattr(pipeline, "latest_skeleton_payload", None) if pipeline.show_hands else None,
+                    "decision": pipeline.latest_decision if pipeline.latest_decision else None,
+                    "sentence": list(pipeline.sentence),
                 }
         return JSONResponse({"status": "error", "detail": "Invalid frame"}, status_code=400)
 
@@ -1090,7 +1058,12 @@ def create_app(
                             "hands": pipeline.hands_count,
                             "in_segment": pipeline.in_segment,
                             "fps": round(pipeline.fps, 1),
+                            "camera": pipeline.current_camera_name,
+                            "camera_enabled": pipeline.camera_enabled,
+                            "rec_mode": pipeline.rec_mode,
                             "skeleton": getattr(pipeline, "latest_skeleton_payload", None) if pipeline.show_hands else None,
+                            "decision": pipeline.latest_decision if pipeline.latest_decision else None,
+                            "sentence": list(pipeline.sentence),
                         })
         except WebSocketDisconnect:
             pass
