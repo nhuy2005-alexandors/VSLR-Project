@@ -182,9 +182,26 @@ document.addEventListener('DOMContentLoaded', () => {
   // =========================================================================
   // 4. TTS INTEGRATION (VieNeu-TTS - Giọng đọc Trúc Ly 48kHz)
   // =========================================================================
+  let activeAudio = null;
+  let lastSpokenText = '';
+  let lastSpokenTime = 0;
+
   function speakText(text) {
     if (!text || !text.trim()) return;
     const cleanText = text.trim();
+
+    // Chống phát lặp cùng 1 từ trong vòng 1.2 giây
+    const nowMs = Date.now();
+    if (cleanText === lastSpokenText && (nowMs - lastSpokenTime) < 1200) {
+      return;
+    }
+    lastSpokenText = cleanText;
+    lastSpokenTime = nowMs;
+
+    if (activeAudio) {
+      try { activeAudio.pause(); } catch (e) {}
+      activeAudio = null;
+    }
 
     const fallbackBrowserSpeech = () => {
       if ('speechSynthesis' in window) {
@@ -204,14 +221,13 @@ document.addEventListener('DOMContentLoaded', () => {
           return res.blob().then(blob => {
             if (blob && blob.size > 100) {
               const audioUrl = URL.createObjectURL(blob);
-              const audio = new Audio(audioUrl);
-              audio.play().catch(() => fallbackBrowserSpeech());
+              activeAudio = new Audio(audioUrl);
+              activeAudio.play().catch(() => fallbackBrowserSpeech());
               return;
             }
             fallbackBrowserSpeech();
           });
         }
-        // Nếu server không trả về WAV (ví dụ đang tải model), phát ngay giọng đọc dự phòng trên trình duyệt
         fallbackBrowserSpeech();
       })
       .catch(() => {
@@ -444,7 +460,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Cập nhật kết quả dự đoán và phát âm thanh ngay lập tức
     if (res.decision && res.decision.seq && res.decision.seq > lastSeenDecisionSeq) {
-      lastSeenDecisionSeq = res.decision.seq;
       handleBackendEvent(res.decision);
     }
   }
@@ -533,8 +548,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  function handleManualSpeak() {
+    const textToSpeak = state.sentence.length > 0
+      ? state.sentence.join(' ')
+      : (heroPredictedWord && heroPredictedWord.textContent !== '---' ? heroPredictedWord.textContent : 'Xin chào');
+    lastSpokenTime = 0; // Cho phép phát ngay khi bấm nút chủ động
+    speakText(textToSpeak);
+    triggerBackendAction('speak');
+  }
+
   document.getElementById('btnClearSentence')?.addEventListener('click', () => triggerBackendAction('clear'));
-  document.getElementById('btnSpeakSentence')?.addEventListener('click', () => triggerBackendAction('speak'));
+  document.getElementById('btnSpeakSentence')?.addEventListener('click', handleManualSpeak);
   btnToggleHands?.addEventListener('click', () => triggerBackendAction('toggle_hands'));
   toggleModeBtn?.addEventListener('click', () => triggerBackendAction('toggle_mode'));
 
@@ -582,7 +606,7 @@ document.addEventListener('DOMContentLoaded', () => {
       triggerBackendAction('toggle_hands');
     } else if (e.key === 's' || e.key === 'S') {
       e.preventDefault();
-      triggerBackendAction('speak');
+      handleManualSpeak();
     } else if (e.key === 'c' || e.key === 'C') {
       e.preventDefault();
       triggerBackendAction('clear');
@@ -709,6 +733,10 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
 
       case 'prediction':
+        if (data.seq) {
+          if (data.seq <= lastSeenDecisionSeq) break;
+          lastSeenDecisionSeq = data.seq;
+        }
         if (data.accepted) {
           // Hiển thị chữ dự đoán lớn kèm hiệu ứng pop
           if (heroPredictedWord) {
@@ -748,7 +776,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (recStatusText) {
           recStatusText.textContent = `ĐÃ PHÁT ÂM: "${data.text}" (${state.ttsVoice})`;
         }
-        speakText(data.text);
+        if (data.text && data.text.includes(' ')) {
+          speakText(data.text);
+        }
         state.sentence = [];
         renderSentence();
         break;

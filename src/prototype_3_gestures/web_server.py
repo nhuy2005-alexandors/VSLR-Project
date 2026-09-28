@@ -446,10 +446,6 @@ class RealtimeVSLRPipeline:
 
             self.broadcast_event(self.latest_decision)
 
-            # Auto-speak current word nếu không phải môi trường Cloud / Headless
-            if not os.environ.get("SPACE_ID"):
-                self.tts_mgr.speak(decision.label)
-
         else:
             self.last_accepted_label = None
             print(f"[REJECT] ({self.current_signer}) -> {decision.label} ({conf_pct}%) — {decision.reason}")
@@ -467,17 +463,9 @@ class RealtimeVSLRPipeline:
 
     def speak_sentence_now(self) -> None:
         if not self.sentence:
-            if not os.environ.get("SPACE_ID"):
-                self.tts_mgr.speak("Xin chào")
-            self.broadcast_event({
-                "type": "sentence_spoken",
-                "text": "Xin chào",
-            })
             return
         text = " ".join(self.sentence)
         print(f"[TTS SENTENCE] -> {text}")
-        if not os.environ.get("SPACE_ID"):
-            self.tts_mgr.speak(text)
         self.broadcast_event({
             "type": "sentence_spoken",
             "text": text,
@@ -690,10 +678,10 @@ class RealtimeVSLRPipeline:
                 if done is not None:
                     self._handle_segment(done)
 
-                # 4. Auto sentence speak when gap expires (chỉ trong chế độ auto)
+                # 4. Auto sentence speak when gap expires (chỉ đọc ghép câu khi có từ 2 từ trở lên, tránh lặp lại từ đơn)
                 if (
                     self.rec_mode == "auto"
-                    and self.sentence
+                    and len(self.sentence) >= 2
                     and not self.tracker.in_segment
                     and (now - self.last_sentence_activity) >= self.sentence_gap
                 ):
@@ -926,48 +914,58 @@ def create_app(
         res = pipeline.switch_camera(camera)
         return res
 
-    # 5. VieNeu-TTS Speech Synthesis API
+    # 5. VieNeu-TTS Speech Synthesis API (Non-blocking ThreadPool + RAM Cache)
+    tts_wav_cache: dict[tuple[str, str], bytes] = {}
+
     @app.get("/api/tts")
-    async def tts_speak(text: str = Query(...), voice: str = Query("Trúc Ly"), play_server: bool = Query(True)):
+    async def tts_speak(text: str = Query(...), voice: str = Query("Trúc Ly"), play_server: bool = Query(False)):
         normalized = normalize_speech_text(text.strip())
         if not normalized:
             raise HTTPException(status_code=400, detail="Văn bản không được để trống")
 
-        # 1. Phát trên loa máy tính nếu yêu cầu: phát xong phản hồi JSON, KHÔNG gửi thêm file âm thanh để tránh echo
         if play_server:
             pipeline.tts_mgr.voice = voice
             pipeline.tts_mgr.speak(normalized)
             return JSONResponse({"status": "played_on_server", "text": normalized, "voice": voice})
 
-        # 2. Sinh dữ liệu WAV trả về trình duyệt (khi client muốn tự phát qua loa trình duyệt / thiết bị di động)
-        try:
-            from vieneu import Vieneu
-            engine = pipeline.tts_mgr._get_vieneu()
-            if engine is not None:
-                audio = engine.infer(
-                    normalized,
-                    voice=voice,
-                    temperature=pipeline.tts_mgr.temperature,
-                    top_p=pipeline.tts_mgr.top_p,
-                    top_k=pipeline.tts_mgr.top_k,
-                    repetition_penalty=pipeline.tts_mgr.repetition_penalty,
-                )
-                sr = getattr(engine, "sample_rate", 48000)
-                audio_arr = np.asarray(audio, dtype=np.float32)
+        cache_key = (normalized, voice)
+        if cache_key in tts_wav_cache:
+            return Response(content=tts_wav_cache[cache_key], media_type="audio/wav")
 
-                # Fade-out & padding
-                fade_len = min(len(audio_arr), int(sr * 0.02))
-                if fade_len > 0:
-                    audio_arr[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
+        def _synthesize_wav_sync() -> bytes | None:
+            try:
+                engine = pipeline.tts_mgr._get_vieneu()
+                if engine is not None:
+                    audio = engine.infer(
+                        normalized,
+                        voice=voice,
+                        temperature=pipeline.tts_mgr.temperature,
+                        top_p=pipeline.tts_mgr.top_p,
+                        top_k=pipeline.tts_mgr.top_k,
+                        repetition_penalty=pipeline.tts_mgr.repetition_penalty,
+                    )
+                    sr = getattr(engine, "sample_rate", 48000)
+                    audio_arr = np.asarray(audio, dtype=np.float32)
 
-                buf = io.BytesIO()
-                sf.write(buf, audio_arr, sr, format="WAV")
-                buf.seek(0)
-                return Response(content=buf.read(), media_type="audio/wav")
-        except Exception as exc:
-            print(f"[TTS API Error] {exc}", file=sys.stderr)
+                    fade_len = min(len(audio_arr), int(sr * 0.02))
+                    if fade_len > 0:
+                        audio_arr[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
 
-        return JSONResponse({"status": "played_on_server", "text": normalized})
+                    buf = io.BytesIO()
+                    sf.write(buf, audio_arr, sr, format="WAV")
+                    buf.seek(0)
+                    return buf.read()
+            except Exception as exc:
+                print(f"[TTS API Error] {exc}", file=sys.stderr)
+            return None
+
+        # Chạy tổng hợp âm thanh trên Thread riêng để KHÔNG BAO GIỜ làm đứng hình Camera/WebSocket
+        wav_bytes = await asyncio.to_thread(_synthesize_wav_sync)
+        if wav_bytes:
+            tts_wav_cache[cache_key] = wav_bytes
+            return Response(content=wav_bytes, media_type="audio/wav")
+
+        return JSONResponse({"status": "tts_fallback", "text": normalized})
 
     # 6. Status API
     @app.get("/api/status")
