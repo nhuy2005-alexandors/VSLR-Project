@@ -856,9 +856,7 @@ class RealtimeVSLRPipeline:
 
             # Khi TẮT khung xương: Xuất trực tiếp luồng hình thô 30 FPS siêu mượt
             if not self.show_hands:
-                now = time.monotonic()
-                raw_out = self._draw_status_badges(frame.copy(), now)
-                self._publish_jpeg(raw_out)
+                self._publish_jpeg(frame)
 
             time.sleep(0.004)
 
@@ -1015,15 +1013,6 @@ class RealtimeVSLRPipeline:
 
                     if done is not None:
                         self._handle_segment(done)
-
-                # 4. Auto sentence speak when gap expires (chỉ đọc ghép câu khi có từ 2 từ trở lên, tránh lặp lại từ đơn)
-                if (
-                    self.rec_mode == "auto"
-                    and len(self.sentence) >= 2
-                    and not self.tracker.in_segment
-                    and (now - self.last_sentence_activity) >= self.sentence_gap
-                ):
-                    self.speak_sentence_now()
 
                 # 5. Khi BẬT khung xương: Vẽ trực tiếp lên CHÍNH frame vừa phân tích để khớp 100% vị trí bàn tay
                 if self.show_hands:

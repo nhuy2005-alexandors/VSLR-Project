@@ -185,59 +185,73 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // =========================================================================
-  // 4. TTS INTEGRATION (VieNeu-TTS - Giọng đọc Trúc Ly 48kHz)
+  // 4. TTS INTEGRATION (VieNeu-TTS - Giọng đọc Trúc Ly 48kHz Duy Nhất)
   // =========================================================================
   let activeAudio = null;
+  let activeTtsAbort = null;
+  let ttsRequestId = 0;
   let lastSpokenText = '';
   let lastSpokenTime = 0;
 
   function speakText(text) {
     if (!text || !text.trim()) return;
-    const cleanText = text.trim();
+    // Chống phát đè khi tab đang ẩn ở nền
+    if (document.hidden) return;
 
-    // Chống phát lặp cùng 1 từ trong vòng 1.2 giây
+    const cleanText = text.trim();
     const nowMs = Date.now();
-    if (cleanText === lastSpokenText && (nowMs - lastSpokenTime) < 1200) {
+    if (cleanText === lastSpokenText && (nowMs - lastSpokenTime) < 1500) {
       return;
     }
     lastSpokenText = cleanText;
     lastSpokenTime = nowMs;
 
-    if (activeAudio) {
-      try { activeAudio.pause(); } catch (e) {}
-      activeAudio = null;
+    // 1. Tăng ID phiên phát âm & Hủy bỏ lượt tải âm thanh cũ
+    ttsRequestId += 1;
+    const currentReqId = ttsRequestId;
+    if (activeTtsAbort) {
+      try { activeTtsAbort.abort(); } catch (e) {}
+      activeTtsAbort = null;
     }
 
-    const fallbackBrowserSpeech = () => {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(cleanText);
-        utterance.lang = 'vi-VN';
-        utterance.rate = 1.0;
-        window.speechSynthesis.speak(utterance);
-      }
-    };
+    // 2. Dừng ngay lập tức âm thanh cũ đang phát
+    if (activeAudio) {
+      try {
+        activeAudio.pause();
+        activeAudio.src = '';
+      } catch (e) {}
+      activeAudio = null;
+    }
+    if ('speechSynthesis' in window) {
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+    }
 
-    // Gọi API VieNeu-TTS backend với play_server=false để nhận luồng WAV phát trên loa trình duyệt
-    fetch(`${API_BASE}/api/tts?text=${encodeURIComponent(cleanText)}&voice=${encodeURIComponent(state.ttsVoice)}&play_server=false`)
+    activeTtsAbort = new AbortController();
+
+    // 3. Chỉ dùng DUY NHẤT giọng đọc VieNeu-TTS Trúc Ly chuẩn 48kHz
+    fetch(`${API_BASE}/api/tts?text=${encodeURIComponent(cleanText)}&voice=${encodeURIComponent(state.ttsVoice)}&play_server=false`, {
+      signal: activeTtsAbort.signal
+    })
       .then(res => {
+        if (currentReqId !== ttsRequestId) return null;
         const contentType = res.headers.get("content-type") || "";
         if (res.ok && contentType.includes("audio/wav")) {
-          return res.blob().then(blob => {
-            if (blob && blob.size > 100) {
-              const audioUrl = URL.createObjectURL(blob);
-              activeAudio = new Audio(audioUrl);
-              activeAudio.play().catch(() => fallbackBrowserSpeech());
-              return;
-            }
-            fallbackBrowserSpeech();
-          });
+          return res.blob();
         }
-        fallbackBrowserSpeech();
+        return null;
       })
-      .catch(() => {
-        fallbackBrowserSpeech();
-      });
+      .then(blob => {
+        if (!blob || currentReqId !== ttsRequestId || blob.size < 100) return;
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+        activeAudio = audio;
+        audio.onended = () => {
+          URL.revokeObjectURL(audioUrl);
+          if (activeAudio === audio) activeAudio = null;
+        };
+        audio.play().catch(() => {});
+      })
+      .catch(() => {});
   }
 
   // =========================================================================
@@ -628,7 +642,6 @@ document.addEventListener('DOMContentLoaded', () => {
       : (heroPredictedWord && heroPredictedWord.textContent !== '---' ? heroPredictedWord.textContent : 'Xin chào');
     lastSpokenTime = 0; // Cho phép phát ngay khi bấm nút chủ động
     speakText(textToSpeak);
-    triggerBackendAction('speak');
   }
 
   document.getElementById('btnClearSentence')?.addEventListener('click', () => triggerBackendAction(`clear&session_id=${encodeURIComponent(state.sessionId)}`));
@@ -817,9 +830,6 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'sentence_spoken':
         if (recStatusText) {
           recStatusText.textContent = `ĐÃ PHÁT ÂM: "${data.text}" (${state.ttsVoice})`;
-        }
-        if (data.text && data.text.includes(' ')) {
-          speakText(data.text);
         }
         state.sentence = [];
         renderSentence();
