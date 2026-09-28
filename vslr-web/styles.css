@@ -762,6 +762,31 @@ button {
   color: #15803d;
 }
 
+.btn-recognize-toggle {
+  background-color: #0284c7;
+  color: #ffffff;
+  font-weight: 700;
+  display: none;
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.35);
+}
+
+.btn-recognize-toggle:hover {
+  background-color: #0369a1;
+  color: #ffffff;
+}
+
+.btn-recognize-toggle.active {
+  background-color: #e11d48;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(225, 29, 72, 0.45);
+  animation: pulseStop 1.8s infinite;
+}
+
+@keyframes pulseStop {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+
 /* MediaPipe Hands Canvas Overlay (Mirrored with video) */
 #handLandmarkCanvas {
   position: absolute;

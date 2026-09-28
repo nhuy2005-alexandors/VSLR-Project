@@ -12,98 +12,7 @@
 </head>
 <body>
 
-  <!-- AMBIENT BACKGROUND DECORATIONS (Matching Reference Site Squircle Tiles & Floating Icons) -->
-  <div class="bg-decorations" aria-hidden="true">
-    <!-- Soft Squircle Rounded Grid Tiles (4 columns x 3 rows) -->
-    <div class="bg-tiles-grid">
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-      <div class="bg-tile"></div>
-    </div>
-
-    <!-- Floating 3D Communication Icons from Reference -->
-    <!-- 1. Angled Phone (Top Center-Left) -->
-    <div class="bg-float-icon icon-phone-top">
-      <svg viewBox="0 0 100 100" width="86" height="86">
-        <rect x="26" y="16" width="48" height="74" rx="12" fill="#f97316" stroke="#ea580c" stroke-width="2" transform="rotate(-10 50 50)"/>
-        <rect x="32" y="24" width="36" height="52" rx="6" fill="#38bdf8" transform="rotate(-10 50 50)"/>
-        <circle cx="50" cy="82" r="3" fill="#ffffff" transform="rotate(-10 50 50)"/>
-      </svg>
-    </div>
-
-    <!-- 2. Webcam Icon (Top Center-Right, behind/near navbar) -->
-    <div class="bg-float-icon icon-webcam">
-      <svg viewBox="0 0 100 100" width="105" height="105">
-        <!-- Stand / Mount -->
-        <rect x="22" y="74" width="56" height="12" rx="6" fill="#1e293b"/>
-        <path d="M44 60H56V74H44Z" fill="#3b82f6"/>
-        <!-- Orange outer bezel -->
-        <circle cx="50" cy="38" r="32" fill="#f97316"/>
-        <!-- Dark inner body -->
-        <circle cx="50" cy="38" r="25" fill="#1e293b"/>
-        <!-- Cyan optical lens -->
-        <circle cx="50" cy="38" r="16" fill="#0284c7"/>
-        <circle cx="50" cy="38" r="10" fill="#38bdf8"/>
-        <!-- Lens flare reflection -->
-        <circle cx="55" cy="33" r="5" fill="#ffffff" opacity="0.85"/>
-      </svg>
-    </div>
-
-    <!-- 3. Microphone with Speech Bubble Icon (Top Right) -->
-    <div class="bg-float-icon icon-mic">
-      <svg viewBox="0 0 110 110" width="110" height="110">
-        <!-- Blue mic capsule -->
-        <rect x="36" y="20" width="28" height="44" rx="14" fill="#1e3a8a"/>
-        <!-- Orange stand arc -->
-        <path d="M26 44C26 58 36 68 50 68C64 68 74 58 74 44" stroke="#f97316" stroke-width="7" stroke-linecap="round" fill="none"/>
-        <line x1="50" y1="68" x2="50" y2="88" stroke="#f97316" stroke-width="7" stroke-linecap="round"/>
-        <line x1="30" y1="88" x2="70" y2="88" stroke="#1e3a8a" stroke-width="9" stroke-linecap="round"/>
-        <!-- Orange speech bubble -->
-        <rect x="68" y="10" width="34" height="24" rx="7" fill="#ea580c"/>
-        <path d="M72 34L68 38V34H72Z" fill="#ea580c"/>
-        <line x1="74" y1="18" x2="94" y2="18" stroke="white" stroke-width="3" stroke-linecap="round"/>
-        <line x1="74" y1="25" x2="88" y2="25" stroke="white" stroke-width="3" stroke-linecap="round"/>
-      </svg>
-    </div>
-
-    <!-- 4. Smartphone & Battery Charging Icon (Bottom Left) -->
-    <div class="bg-float-icon icon-phone">
-      <svg viewBox="0 0 100 100" width="95" height="95">
-        <!-- Phone body -->
-        <rect x="26" y="10" width="48" height="80" rx="11" fill="#fed7aa" stroke="#fdba74" stroke-width="2"/>
-        <rect x="32" y="20" width="36" height="58" rx="5" fill="#ffffff"/>
-        <!-- Battery body -->
-        <rect x="42" y="38" width="16" height="26" rx="4" fill="#f59e0b"/>
-        <rect x="46" y="34" width="8" height="4" rx="1" fill="#f59e0b"/>
-        <!-- Lighting Bolt / Charging symbol -->
-        <polygon points="51,42 46,51 50,51 48,58 55,49 51,49" fill="#ffffff"/>
-        <!-- Cable plug -->
-        <circle cx="26" cy="84" r="9" fill="#93c5fd"/>
-        <path d="M26 84Q36 84 36 90" stroke="#3b82f6" stroke-width="3.5" fill="none"/>
-      </svg>
-    </div>
-
-    <!-- 5. Blue Communication Card / Dialogue (Bottom Center) -->
-    <div class="bg-float-icon icon-chat">
-      <svg viewBox="0 0 100 100" width="90" height="90">
-        <path d="M18 28C18 20 26 14 36 14H68C78 14 86 20 86 28V52C86 60 78 66 68 66H44L28 80V66H36C26 66 18 60 18 52V28Z" fill="#2563eb" opacity="0.9"/>
-        <circle cx="40" cy="40" r="5" fill="white"/>
-        <circle cx="52" cy="40" r="5" fill="white"/>
-        <circle cx="64" cy="40" r="5" fill="white"/>
-      </svg>
-    </div>
-  </div>
-
-  <!-- FLOATING TOP NAVIGATION BAR (Clean Header: No diamond icon, No GitHub icon) -->
+  <!-- FLOATING TOP NAVIGATION BAR -->
   <header class="navbar-wrapper">
     <div class="floating-navbar">
       <div class="nav-brand" id="navLogo">
@@ -114,7 +23,6 @@
         <button class="nav-item active" data-view="view-home">Home</button>
         <button class="nav-item" data-view="view-translate">Translate</button>
         <button class="nav-item" data-view="view-dictionary">Dictionary</button>
-        <button class="nav-item" id="openAboutBtn">About</button>
       </nav>
     </div>
   </header>
@@ -253,11 +161,10 @@
               </div>
             </div>
 
-            <!-- Cam helper controls (Matching Terminal Options) -->
+            <!-- Cam helper controls -->
             <div class="video-sub-controls">
               <button class="pill-toggle-btn btn-webcam-toggle" id="btnToggleCamera" title="Phím tắt: W">📷 Webcam: TẮT (W)</button>
-              <button class="pill-toggle-btn active" id="btnToggleHands" title="Phím tắt: H">Khung xương: BẬT (H)</button>
-              <button class="pill-toggle-btn active" id="toggleModeBtn" title="Phím tắt: M">Chế độ: Tự động (M)</button>
+              <button class="pill-toggle-btn btn-recognize-toggle" id="btnToggleRecognize" title="Bắt đầu / Tạm dừng nhận diện cử chỉ (Phím SPACE)">▶ BẮT ĐẦU NHẬN DIỆN (SPACE)</button>
             </div>
           </div>
 
@@ -359,45 +266,6 @@
     </section>
 
   </main>
-
-  <!-- ABOUT / NCKH MODAL -->
-  <div class="modal-layer" id="aboutModal">
-    <div class="modal-card">
-      <div class="modal-head">
-        <h3 class="modal-head-title">Về Dự án NCKH VSLR — ĐH Cần Thơ</h3>
-        <button class="modal-close" id="closeAboutModal">&times;</button>
-      </div>
-      <div class="modal-body-content">
-        <p>
-          <strong>Hệ thống Nhận diện Ngôn ngữ Ký hiệu Việt Nam (VSLR)</strong> là công trình nghiên cứu khoa học thuộc Trường Công nghệ Thông tin & Truyền thông — <strong>Đại học Cần Thơ (CTU)</strong>.
-        </p>
-        <div class="kpi-row">
-          <div class="kpi-item">
-            <span class="kpi-v">24</span>
-            <span class="kpi-l">Cử chỉ tiếng Việt</span>
-          </div>
-          <div class="kpi-item">
-            <span class="kpi-v">90.97%</span>
-            <span class="kpi-l">Độ chính xác LOSO</span>
-          </div>
-          <div class="kpi-item">
-            <span class="kpi-v">576</span>
-            <span class="kpi-l">Video 4 người ký</span>
-          </div>
-          <div class="kpi-item">
-            <span class="kpi-v">203 dims</span>
-            <span class="kpi-l">Vector Holistic v3</span>
-          </div>
-        </div>
-        <p class="audit-note">
-          ✓ Dữ liệu được kiểm định chéo độc lập theo phương pháp Leave-One-Signer-Out (LOSO). Checkpoint mô hình tối ưu ~987 KB đạt tốc độ nhận diện thời gian thực &lt; 45ms.
-        </p>
-      </div>
-      <div class="modal-foot">
-        <button class="btn-sm btn-primary-blue" id="closeAboutBtnBottom">Đóng</button>
-      </div>
-    </div>
-  </div>
 
   <!-- GESTURE DETAIL POPUP (WITH HD VIDEO TUTORIAL) -->
   <div class="modal-layer" id="gestureDetailModal">

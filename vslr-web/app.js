@@ -70,6 +70,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const DEFAULT_REMOTE_BACKEND = 'https://ntbii305-vslr-backend.hf.space';
   const API_BASE = isLocalHost ? '' : (localStorage.getItem('vslr_backend_url') || DEFAULT_REMOTE_BACKEND);
 
+  // Sinh mã phiên ngẫu nhiên độc lập cho từng tab / thiết bị (Multi-tenant)
+  const clientSessionId = sessionStorage.getItem('vslr_session_id') || ('sess_' + Math.random().toString(36).substring(2, 10));
+  sessionStorage.setItem('vslr_session_id', clientSessionId);
+
   const state = {
     activeView: 'view-home',
     dictViewMode: 'cards', // 'cards' | 'videos'
@@ -78,7 +82,9 @@ document.addEventListener('DOMContentLoaded', () => {
     clientCamMode: !isLocalPC,
     clientStream: null,
     clientFrameTimer: null,
+    sessionId: clientSessionId,
     signerName: localStorage.getItem('vslr_signer_name') || '',
+    isRecognizing: false, // Mặc định mở camera CHƯA nhận diện liền, chờ bấm nút bắt đầu
     sentence: [],
     recMode: 'auto',       // 'auto' | 'manual'
     showHands: true,
@@ -101,10 +107,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const camStandbyScreen = document.getElementById('camStandbyScreen');
   const btnHeroStartCam = document.getElementById('btnHeroStartCam');
   const btnToggleCamera = document.getElementById('btnToggleCamera');
+  const btnToggleRecognize = document.getElementById('btnToggleRecognize');
   const camPrompt = document.getElementById('camPrompt');
   const btnStartRealCam = document.getElementById('btnStartRealCam');
-  const btnToggleHands = document.getElementById('btnToggleHands');
-  const toggleModeBtn = document.getElementById('toggleModeBtn');
   const btnToggleTheater = document.getElementById('btnToggleTheater');
   const translationDualBox = document.querySelector('.translation-dual-box');
   const recentTagsBox = document.getElementById('recentTagsBox');
@@ -383,6 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function stopClientWebcam() {
+    state.isRecognizing = false;
     if (state.clientFrameTimer) {
       clearInterval(state.clientFrameTimer);
       state.clientFrameTimer = null;
@@ -406,7 +412,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     state.cameraEnabled = false;
     updateCameraStateUI();
-    triggerBackendAction('stop_camera');
+    triggerBackendAction(`stop_camera&session_id=${encodeURIComponent(state.sessionId)}`);
   }
 
   function toggleCameraAction() {
@@ -418,6 +424,64 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } else {
       triggerBackendAction('toggle_camera');
+    }
+  }
+
+  function updateRecognizeUI() {
+    if (!state.cameraEnabled) {
+      if (btnToggleRecognize) {
+        btnToggleRecognize.classList.remove('active');
+        btnToggleRecognize.style.display = 'none';
+      }
+      if (recStatusTag) recStatusTag.style.display = 'none';
+      if (btnMainToggleTranslate) {
+        btnMainToggleTranslate.classList.remove('stopping');
+        btnMainToggleTranslate.textContent = '[▶ BẬT WEBCAM NHẬN DIỆN (W)]';
+      }
+    } else if (!state.isRecognizing) {
+      if (btnToggleRecognize) {
+        btnToggleRecognize.style.display = 'inline-block';
+        btnToggleRecognize.classList.remove('active');
+        btnToggleRecognize.textContent = '▶ BẮT ĐẦU NHẬN DIỆN (SPACE)';
+      }
+      if (recStatusTag) {
+        recStatusTag.style.display = 'flex';
+        recStatusTag.classList.remove('active');
+      }
+      if (recStatusText) recStatusText.textContent = '⚪ ĐÃ BẬT CAMERA (Chờ bấm Bắt đầu)';
+      if (btnMainToggleTranslate) {
+        btnMainToggleTranslate.classList.remove('stopping');
+        btnMainToggleTranslate.textContent = '[▶ BẮT ĐẦU NHẬN DIỆN (SPACE)]';
+      }
+    } else {
+      if (btnToggleRecognize) {
+        btnToggleRecognize.style.display = 'inline-block';
+        btnToggleRecognize.classList.add('active');
+        btnToggleRecognize.textContent = '⏸ TẠM DỪNG NHẬN DIỆN (SPACE)';
+      }
+      if (recStatusTag) {
+        recStatusTag.style.display = 'flex';
+        recStatusTag.classList.add('active');
+      }
+      if (recStatusText) recStatusText.textContent = '🟢 ĐANG NHẬN DIỆN (Sẵn sàng dơ tay)';
+      if (btnMainToggleTranslate) {
+        btnMainToggleTranslate.classList.add('stopping');
+        btnMainToggleTranslate.textContent = '[⏸ TẠM DỪNG NHẬN DIỆN (SPACE)]';
+      }
+    }
+  }
+
+  function toggleRecognitionAction() {
+    if (!state.cameraEnabled) {
+      toggleCameraAction();
+      return;
+    }
+    state.isRecognizing = !state.isRecognizing;
+    updateRecognizeUI();
+    const act = state.isRecognizing ? 'start_recognize' : 'stop_recognize';
+    triggerBackendAction(`${act}&session_id=${encodeURIComponent(state.sessionId)}`);
+    if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({ recognizing: state.isRecognizing, signer: state.signerName }));
     }
   }
 
@@ -436,20 +500,19 @@ document.addEventListener('DOMContentLoaded', () => {
       hudCamStatus.textContent = res.camera;
     }
 
+    if (typeof res.is_recognizing !== 'undefined' && state.isRecognizing !== res.is_recognizing) {
+      state.isRecognizing = res.is_recognizing;
+      updateRecognizeUI();
+    }
+
     // Cập nhật trạng thái GHI CỬ CHỈ (màu đỏ nhấp nháy) vs SẴN SÀNG
-    if (res.in_segment) {
-      recStatusTag?.classList.add('active');
-      if (recStatusText) recStatusText.textContent = 'ĐANG GHI CỬ CHỈ...';
-      if (btnMainToggleTranslate) {
-        btnMainToggleTranslate.textContent = '[# DỪNG & DỊCH (SPACE)]';
-        btnMainToggleTranslate.classList.add('stopping');
-      }
-    } else {
-      recStatusTag?.classList.remove('active');
-      if (recStatusText) recStatusText.textContent = 'SẴN SÀNG (SPACE)';
-      if (btnMainToggleTranslate) {
-        btnMainToggleTranslate.textContent = '[> BẮT ĐẦU GHI (SPACE)]';
-        btnMainToggleTranslate.classList.remove('stopping');
+    if (state.isRecognizing) {
+      if (res.in_segment) {
+        recStatusTag?.classList.add('active');
+        if (recStatusText) recStatusText.textContent = '🔴 ĐANG GHI CỬ CHỈ...';
+      } else {
+        recStatusTag?.classList.remove('active');
+        if (recStatusText) recStatusText.textContent = '🟢 ĐANG NHẬN DIỆN (Sẵn sàng dơ tay)';
       }
     }
 
@@ -475,14 +538,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const ctx = frameCanvas.getContext('2d');
     let isSending = false;
     let wsSafetyTimeout = null;
+    let lastVideoTime = -1;
 
-    // 1. Mở kết nối WebSocket tốc độ cao tới Backend
+    // 1. Mở kết nối WebSocket tốc độ cao tới Backend (kèm session_id độc lập)
     try {
       if (clientWs) {
         try { clientWs.close(); } catch (e) {}
       }
       const baseOrigin = API_BASE || window.location.origin;
-      const wsUrl = baseOrigin.replace(/^http/, 'ws') + '/api/ws/client_feed';
+      const wsUrl = baseOrigin.replace(/^http/, 'ws') +
+        `/api/ws/client_feed?signer=${encodeURIComponent(state.signerName || 'Khách')}` +
+        `&recognizing=${state.isRecognizing ? 1 : 0}` +
+        `&session_id=${encodeURIComponent(state.sessionId)}`;
       clientWs = new WebSocket(wsUrl);
       clientWs.binaryType = 'arraybuffer';
       clientWs.onmessage = (evt) => {
@@ -503,6 +570,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const pumpNextFrame = () => {
       if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended || isSending) return;
+      // Chống lặp frame: chỉ gửi khi camera đã render frame mới thực sự
+      if (liveVideo.currentTime === lastVideoTime && lastVideoTime > 0) return;
+      lastVideoTime = liveVideo.currentTime;
+
       isSending = true;
       try {
         ctx.drawImage(liveVideo, 0, 0, frameCanvas.width, frameCanvas.height);
@@ -518,7 +589,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
 
           // Ưu tiên 2: HTTP Fallback
-          fetch(`${API_BASE}/api/client_frame?signer=${encodeURIComponent(state.signerName || 'Khách')}`, {
+          fetch(`${API_BASE}/api/client_frame?signer=${encodeURIComponent(state.signerName || 'Khách')}&recognizing=${state.isRecognizing ? 1 : 0}&session_id=${encodeURIComponent(state.sessionId)}`, {
             method: 'POST',
             body: blob,
             headers: { 'Content-Type': 'image/jpeg' }
@@ -539,12 +610,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Phím bấm giao diện
   btnHeroStartCam?.addEventListener('click', toggleCameraAction);
   btnToggleCamera?.addEventListener('click', toggleCameraAction);
+  btnToggleRecognize?.addEventListener('click', toggleRecognitionAction);
 
   btnMainToggleTranslate?.addEventListener('click', () => {
     if (!state.cameraEnabled) {
       toggleCameraAction();
     } else {
-      triggerBackendAction('space');
+      toggleRecognitionAction();
     }
   });
 
@@ -557,10 +629,8 @@ document.addEventListener('DOMContentLoaded', () => {
     triggerBackendAction('speak');
   }
 
-  document.getElementById('btnClearSentence')?.addEventListener('click', () => triggerBackendAction('clear'));
+  document.getElementById('btnClearSentence')?.addEventListener('click', () => triggerBackendAction(`clear&session_id=${encodeURIComponent(state.sessionId)}`));
   document.getElementById('btnSpeakSentence')?.addEventListener('click', handleManualSpeak);
-  btnToggleHands?.addEventListener('click', () => triggerBackendAction('toggle_hands'));
-  toggleModeBtn?.addEventListener('click', () => triggerBackendAction('toggle_mode'));
 
   // Phím tắt bàn phím (Tương thích 100% với CHAY_CAMERA_*.bat)
   document.addEventListener('keydown', (e) => {
@@ -593,23 +663,17 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!state.cameraEnabled) {
         toggleCameraAction();
       } else {
-        triggerBackendAction('space');
+        toggleRecognitionAction();
       }
     } else if (e.key === 't' || e.key === 'T') {
       e.preventDefault();
       toggleTheaterMode();
-    } else if (e.key === 'm' || e.key === 'M') {
-      e.preventDefault();
-      triggerBackendAction('toggle_mode');
-    } else if (e.key === 'h' || e.key === 'H') {
-      e.preventDefault();
-      triggerBackendAction('toggle_hands');
     } else if (e.key === 's' || e.key === 'S') {
       e.preventDefault();
       handleManualSpeak();
     } else if (e.key === 'c' || e.key === 'C') {
       e.preventDefault();
-      triggerBackendAction('clear');
+      triggerBackendAction(`clear&session_id=${encodeURIComponent(state.sessionId)}`);
     }
   });
 
@@ -887,14 +951,11 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
       }
-      if (recStatusTag) recStatusTag.style.display = 'flex';
       if (btnToggleCamera) {
         btnToggleCamera.classList.add('active');
         btnToggleCamera.textContent = '📷 Webcam: BẬT (W)';
       }
-      if (btnMainToggleTranslate && !btnMainToggleTranslate.classList.contains('stopping')) {
-        btnMainToggleTranslate.textContent = '[> BẮT ĐẦU GHI (SPACE)]';
-      }
+      updateRecognizeUI();
     } else {
       camStandbyScreen?.classList.remove('hidden');
       camPrompt?.classList.add('hidden');
@@ -907,10 +968,6 @@ document.addEventListener('DOMContentLoaded', () => {
         liveStreamImg.classList.add('hidden');
         liveStreamImg.style.display = 'none';
       }
-      if (recStatusTag) {
-        recStatusTag.classList.remove('active');
-        recStatusTag.style.display = 'none';
-      }
       if (hudFpsVal) hudFpsVal.textContent = '0.0';
       if (hudCamStatus) hudCamStatus.textContent = state.clientStream ? 'Webcam Trình duyệt' : 'Chờ bật (Tắt)';
       if (hudHandsStatus) {
@@ -921,10 +978,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btnToggleCamera.classList.remove('active');
         btnToggleCamera.textContent = '📷 Webcam: TẮT (W)';
       }
-      if (btnMainToggleTranslate) {
-        btnMainToggleTranslate.classList.remove('stopping');
-        btnMainToggleTranslate.textContent = '[▶ BẬT WEBCAM NHẬN DIỆN (W)]';
-      }
+      updateRecognizeUI();
     }
   }
 
@@ -1024,25 +1078,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // =========================================================================
-  // 9. MODALS (ABOUT & GESTURE DETAIL WITH VIDEO TUTORIAL)
+  // 9. MODALS (GESTURE DETAIL WITH VIDEO TUTORIAL)
   // =========================================================================
-  const aboutModal = document.getElementById('aboutModal');
   const gestureDetailModal = document.getElementById('gestureDetailModal');
   const detailTutorialVideo = document.getElementById('detailTutorialVideo');
   const btnReplayTutorial = document.getElementById('btnReplayTutorial');
   const speedBtns = document.querySelectorAll('.speed-btn[data-speed]');
-
-  document.getElementById('openAboutBtn')?.addEventListener('click', () => {
-    aboutModal?.classList.add('open');
-  });
-
-  document.getElementById('closeAboutModal')?.addEventListener('click', () => {
-    aboutModal?.classList.remove('open');
-  });
-
-  document.getElementById('closeAboutBtnBottom')?.addEventListener('click', () => {
-    aboutModal?.classList.remove('open');
-  });
 
   // Chi tiết cử chỉ & Video hướng dẫn
   let activeModalGesture = null;
@@ -1127,17 +1168,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Đóng modal khi click ra nền ngoài hoặc nhấn ESC
-  aboutModal?.addEventListener('click', (e) => {
-    if (e.target === aboutModal) aboutModal.classList.remove('open');
-  });
-
   gestureDetailModal?.addEventListener('click', (e) => {
     if (e.target === gestureDetailModal) closeGestureDetail();
   });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      aboutModal?.classList.remove('open');
       closeGestureDetail();
     }
   });

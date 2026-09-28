@@ -99,6 +99,259 @@ def extract_raw_hand_coords(res: Any) -> list[tuple[float, float]]:
     return pts
 
 
+class ClientAISession:
+    """Phiên AI độc lập cho từng người dùng (chống lẫn lộn frame và lặp frame khi nhiều người test cùng lúc)."""
+
+    def __init__(self, session_id: str, signer_name: str, pipeline: RealtimeVSLRPipeline) -> None:
+        self.session_id = session_id
+        self.signer_name = signer_name or "Khách"
+        self.pipeline = pipeline
+        self.tracker = SegmentTracker(pipeline.word_gap, pipeline.max_seconds, min_active_seconds=0.0)
+        self.recorder = GestureVideoRecorder(
+            record_dir=pipeline.record_dir,
+            fps=30.0,
+            enabled=pipeline.recorder.enabled,
+            record_mode="both",
+        )
+        self.sentence: list[str] = []
+        self.is_recognizing: bool = False  # Mặc định bật camera chưa nhận diện liền
+        self.decision_seq: int = 0
+        self.latest_decision: dict[str, Any] = {}
+        self.last_accepted_label: str | None = None
+        self.last_accepted_time: float = 0.0
+        self.raw_hand_history: deque = deque(maxlen=4)
+        self.still_since: float | None = None
+        self.latest_skeleton_payload: Any = None
+        self.in_segment: bool = False
+        self.hands_count: int = 0
+        self.fps: float = 0.0
+        self.frame_counter: int = 0
+        self.fps_calc_time: float = time.monotonic()
+        self.last_frame_hash: int | None = None
+        self.last_active_time: float = time.monotonic()
+
+    def process_frame(self, frame: np.ndarray, is_recognizing: bool, signer_name: str | None = None) -> dict[str, Any]:
+        now = time.monotonic()
+        self.last_active_time = now
+        if signer_name and signer_name.strip():
+            self.signer_name = signer_name.strip()
+        self.is_recognizing = is_recognizing
+
+        # Tính FPS riêng của phiên này
+        self.frame_counter += 1
+        if now - self.fps_calc_time >= 1.0:
+            self.fps = self.frame_counter / (now - self.fps_calc_time)
+            self.frame_counter = 0
+            self.fps_calc_time = now
+
+        # Kiểm tra chống lặp frame (frame deduplication)
+        small_sample = frame[::20, ::20, 0]
+        f_hash = int(np.sum(small_sample))
+        is_duplicate = (f_hash == self.last_frame_hash)
+        self.last_frame_hash = f_hash
+
+        # Trích xuất MediaPipe Holistic
+        with self.pipeline.session_extractor_lock:
+            obs = self.pipeline.session_extractor.process_frame(frame)
+        res = getattr(obs, "results", None)
+
+        # Trích xuất khung xương 2D cho màn hình của client
+        skeleton_payload = None
+        if res is not None:
+            pose_dict = {}
+            left_list = []
+            right_list = []
+            if hasattr(res, "pose_landmarks") and res.pose_landmarks:
+                for idx, lm in enumerate(res.pose_landmarks.landmark):
+                    if idx >= 11 and getattr(lm, "visibility", 1.0) > 0.4:
+                        pose_dict[str(idx)] = [round(lm.x, 3), round(lm.y, 3)]
+            if hasattr(res, "left_hand_landmarks") and res.left_hand_landmarks:
+                for lm in res.left_hand_landmarks.landmark:
+                    left_list.append([round(lm.x, 3), round(lm.y, 3)])
+            if hasattr(res, "right_hand_landmarks") and res.right_hand_landmarks:
+                for lm in res.right_hand_landmarks.landmark:
+                    right_list.append([round(lm.x, 3), round(lm.y, 3)])
+            skeleton_payload = {
+                "pose": pose_dict,
+                "left": left_list,
+                "right": right_list,
+            }
+        self.latest_skeleton_payload = skeleton_payload
+        self.hands_count = int(obs.left_hand_present) + int(obs.right_hand_present)
+
+        # Nếu người dùng CHƯA BẤM "BẮT ĐẦU NHẬN DIỆN":
+        # Chỉ trả về khung xương để người dùng soi gương setup, tuyệt đối không ghi video và không nhận diện!
+        if not self.is_recognizing:
+            if self.in_segment or self.tracker.in_segment:
+                self.tracker.reset()
+                self.recorder.cancel_gesture()
+            self.in_segment = False
+            self.raw_hand_history.clear()
+            self.still_since = None
+            return {
+                "type": "telemetry",
+                "hands": self.hands_count,
+                "in_segment": False,
+                "fps": round(self.fps, 1),
+                "camera": "Webcam Trình duyệt",
+                "camera_enabled": True,
+                "is_recognizing": False,
+                "skeleton": self.latest_skeleton_payload,
+                "decision": None,
+                "sentence": list(self.sentence),
+            }
+
+        # Khi ĐÃ BẤM "BẮT ĐẦU NHẬN DIỆN":
+        current_raw_pts = extract_raw_hand_coords(res)
+        gesture_active = False
+
+        if current_raw_pts:
+            self.raw_hand_history.append((now, current_raw_pts))
+            recent_dist = 0.0
+            recent_upward = 0.0
+
+            if len(self.raw_hand_history) >= 2:
+                _, p0 = self.raw_hand_history[0]
+                _, p1 = self.raw_hand_history[-1]
+                if len(p0) == len(p1) and len(p0) > 0:
+                    diff = np.asarray(p1) - np.asarray(p0)
+                    recent_dist = float(np.max(np.linalg.norm(diff, axis=1)))
+                    recent_upward = float(np.max(np.asarray(p0)[:, 1] - np.asarray(p1)[:, 1]))
+                else:
+                    recent_dist = 0.03
+                    recent_upward = 0.03
+
+            hand_is_moving = (recent_upward >= 0.012) or (recent_dist >= 0.016)
+
+            if not self.in_segment:
+                if hand_is_moving:
+                    gesture_active = True
+                    self.still_since = None
+                else:
+                    gesture_active = False
+            else:
+                if recent_dist >= 0.009:
+                    gesture_active = True
+                    self.still_since = None
+                else:
+                    if self.still_since is None:
+                        self.still_since = now
+                        gesture_active = True
+                    elif (now - self.still_since) >= 0.35:
+                        gesture_active = False
+                    else:
+                        gesture_active = True
+        else:
+            self.raw_hand_history.clear()
+            self.still_since = None
+            gesture_active = False
+
+        if not is_duplicate:
+            done = self.tracker.feed(
+                obs.hands_present,
+                obs.features,
+                now,
+                obs.left_hand_present,
+                obs.right_hand_present,
+                gesture_active=gesture_active,
+            )
+            self.in_segment = self.tracker.in_segment
+            in_gesture = self.in_segment or (done is not None)
+            self.recorder.feed_frame(frame, obs, in_segment=in_gesture, now=now)
+
+            if done is not None:
+                self._handle_segment(done)
+
+        return {
+            "type": "telemetry",
+            "hands": self.hands_count,
+            "in_segment": self.in_segment,
+            "fps": round(self.fps, 1),
+            "camera": "Webcam Trình duyệt",
+            "camera_enabled": True,
+            "is_recognizing": True,
+            "skeleton": self.latest_skeleton_payload,
+            "decision": self.latest_decision if self.latest_decision else None,
+            "sentence": list(self.sentence),
+        }
+
+    def _handle_segment(self, segment: Segment | None) -> None:
+        if segment is None or segment.duration < self.pipeline.min_seconds:
+            self.recorder.cancel_gesture()
+            return
+
+        seg_motion = calculate_segment_motion(
+            segment.features,
+            segment.left_hand_present,
+            segment.right_hand_present,
+        )
+        if seg_motion < 0.35:
+            print(f"[STANDSTILL IGNORED] [{self.session_id}] Tay đứng yên (biên độ: {seg_motion:.2f} < 0.35), hủy bỏ.")
+            self.recorder.cancel_gesture()
+            return
+
+        decision = decide_segment(
+            self.pipeline.model,
+            self.pipeline.labels,
+            self.pipeline.device,
+            segment,
+            self.pipeline.seq_len,
+            confidence_threshold=self.pipeline.confidence_threshold,
+            reject_policy=self.pipeline.policy,
+            allow_uncalibrated=self.pipeline.allow_uncalibrated,
+        )
+
+        if self.recorder.enabled:
+            self.recorder.save_gesture(
+                decision,
+                labels=self.pipeline.labels,
+                duration=segment.duration,
+                signer_name=self.signer_name,
+            )
+
+        self.decision_seq += 1
+        now_seg = time.monotonic()
+        conf_pct = round(decision.confidence * 100)
+
+        if decision.accepted:
+            if (
+                self.pipeline.cooldown > 0
+                and decision.label == self.last_accepted_label
+                and (now_seg - self.last_accepted_time) < self.pipeline.cooldown
+            ):
+                return
+
+            self.last_accepted_label = decision.label
+            self.last_accepted_time = now_seg
+            self.sentence.append(decision.label)
+
+            print(f"[WORD RECOGNIZED] [{self.session_id} - {self.signer_name}] -> {decision.label} ({conf_pct}%) | Câu: {' '.join(self.sentence)}")
+
+            self.latest_decision = {
+                "seq": self.decision_seq,
+                "type": "prediction",
+                "label": decision.label,
+                "confidence": conf_pct,
+                "accepted": True,
+                "reason": "",
+                "sentence": list(self.sentence),
+                "signer": self.signer_name,
+            }
+        else:
+            self.last_accepted_label = None
+            print(f"[REJECT] [{self.session_id} - {self.signer_name}] -> {decision.label} ({conf_pct}%) — {decision.reason}")
+            self.latest_decision = {
+                "seq": self.decision_seq,
+                "type": "prediction",
+                "label": decision.label,
+                "confidence": conf_pct,
+                "accepted": False,
+                "reason": decision.reason,
+                "sentence": list(self.sentence),
+                "signer": self.signer_name,
+            }
+
+
 class RealtimeVSLRPipeline:
     """Core realtime engine bridging OpenCV, MediaPipe Holistic, PyTorch BiLSTM, and VieNeu-TTS."""
 
@@ -209,6 +462,33 @@ class RealtimeVSLRPipeline:
         # Kích hoạt 0ms tức thì khi dơ tay lên (min_active_seconds=0.0)
         self.tracker = SegmentTracker(self.word_gap, self.max_seconds, min_active_seconds=0.0)
 
+        # Quản lý phiên làm việc độc lập cho từng người dùng (Multi-tenant Session Isolation)
+        self.session_extractor = HolisticExtractor()
+        self.session_extractor_lock = threading.Lock()
+        self.client_sessions: dict[str, ClientAISession] = {}
+        self.recognition_enabled: bool = False
+
+    def get_or_create_session(self, session_id: str, signer_name: str | None = None) -> ClientAISession:
+        clean_id = (session_id or "").strip() or "default"
+        clean_signer = (signer_name or "").strip() or self.current_signer
+        now = time.monotonic()
+
+        # Dọn dẹp các session cũ không hoạt động quá 5 phút
+        expired = [k for k, s in self.client_sessions.items() if (now - s.last_active_time) > 300.0]
+        for k in expired:
+            try:
+                self.client_sessions[k].recorder.close()
+                del self.client_sessions[k]
+            except Exception:
+                pass
+
+        if clean_id not in self.client_sessions:
+            self.client_sessions[clean_id] = ClientAISession(clean_id, clean_signer, self)
+        sess = self.client_sessions[clean_id]
+        if signer_name and signer_name.strip():
+            sess.signer_name = signer_name.strip()
+        return sess
+
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.event_loop = loop
 
@@ -246,6 +526,15 @@ class RealtimeVSLRPipeline:
             if self.cap and self.cap.isOpened():
                 self.cap.release()
                 self.cap = None
+        for s in list(self.client_sessions.values()):
+            try:
+                s.recorder.close()
+            except Exception:
+                pass
+        try:
+            self.session_extractor.close()
+        except Exception:
+            pass
         self.recorder.close()
         self.tts_mgr.stop()
         print(f"[Pipeline] Đã dừng toàn bộ pipeline.")
@@ -692,37 +981,45 @@ class RealtimeVSLRPipeline:
                     self.still_since = None
                     gesture_active = False
 
-                if self.rec_mode == "manual":
-                    if self.manual_recording:
+                if not self.recognition_enabled and self.rec_mode != "manual":
+                    if self.in_segment or self.tracker.in_segment:
+                        self.tracker.reset()
+                        self.recorder.cancel_gesture()
+                    self.in_segment = False
+                    self.raw_hand_history.clear()
+                    done = None
+                else:
+                    if self.rec_mode == "manual":
+                        if self.manual_recording:
+                            done = self.tracker.feed(
+                                True,
+                                obs.features,
+                                now,
+                                obs.left_hand_present,
+                                obs.right_hand_present,
+                                gesture_active=True,
+                            )
+                            if now - self.manual_rec_start >= self.max_seconds:
+                                self.manual_recording = False
+                                done = self.tracker.force_boundary(now)
+                        else:
+                            done = None
+                    else:
                         done = self.tracker.feed(
-                            True,
+                            obs.hands_present,
                             obs.features,
                             now,
                             obs.left_hand_present,
                             obs.right_hand_present,
-                            gesture_active=True,
+                            gesture_active=gesture_active,
                         )
-                        if now - self.manual_rec_start >= self.max_seconds:
-                            self.manual_recording = False
-                            done = self.tracker.force_boundary(now)
-                    else:
-                        done = None
-                else:
-                    done = self.tracker.feed(
-                        obs.hands_present,
-                        obs.features,
-                        now,
-                        obs.left_hand_present,
-                        obs.right_hand_present,
-                        gesture_active=gesture_active,
-                    )
 
-                self.in_segment = self.tracker.in_segment or self.manual_recording
-                in_gesture = self.in_segment or (done is not None)
-                self.recorder.feed_frame(frame, obs, in_segment=in_gesture, now=now)
+                    self.in_segment = self.tracker.in_segment or self.manual_recording
+                    in_gesture = self.in_segment or (done is not None)
+                    self.recorder.feed_frame(frame, obs, in_segment=in_gesture, now=now)
 
-                if done is not None:
-                    self._handle_segment(done)
+                    if done is not None:
+                        self._handle_segment(done)
 
                 # 4. Auto sentence speak when gap expires (chỉ đọc ghép câu khi có từ 2 từ trở lên, tránh lặp lại từ đơn)
                 if (
@@ -889,7 +1186,7 @@ def create_app(
 
     # 3. Action API (Space, Clear, Speak, Toggle Hands, Toggle Mode, Start/Stop Camera)
     @app.post("/api/action")
-    async def trigger_action(action: str = Query(...), client_mode: bool = Query(False)):
+    async def trigger_action(action: str = Query(...), client_mode: bool = Query(False), session_id: str = Query("default")):
         cmd = action.lower().strip()
         if cmd == "start_camera":
             ok = pipeline.start_camera(client_mode=client_mode)
@@ -901,15 +1198,45 @@ def create_app(
             if pipeline.camera_enabled:
                 pipeline.stop_camera()
             else:
-                pipeline.start_camera()
+                pipeline.start_camera(client_mode=client_mode)
             return {"status": "ok", "action": "toggle_camera", "camera_enabled": pipeline.camera_enabled}
+        elif cmd in ("toggle_recognize", "toggle_recognition"):
+            session = pipeline.get_or_create_session(session_id)
+            session.is_recognizing = not session.is_recognizing
+            if not session.is_recognizing:
+                session.tracker.reset()
+                session.recorder.cancel_gesture()
+            pipeline.recognition_enabled = session.is_recognizing
+            return {"status": "ok", "action": "toggle_recognize", "recognizing": session.is_recognizing}
+        elif cmd == "start_recognize":
+            session = pipeline.get_or_create_session(session_id)
+            session.is_recognizing = True
+            session.tracker.reset()
+            pipeline.recognition_enabled = True
+            return {"status": "ok", "action": "start_recognize", "recognizing": True}
+        elif cmd == "stop_recognize":
+            session = pipeline.get_or_create_session(session_id)
+            session.is_recognizing = False
+            session.tracker.reset()
+            session.recorder.cancel_gesture()
+            pipeline.recognition_enabled = False
+            return {"status": "ok", "action": "stop_recognize", "recognizing": False}
         elif cmd == "space":
             if not pipeline.camera_enabled:
-                pipeline.start_camera()
+                pipeline.start_camera(client_mode=client_mode)
                 return {"status": "ok", "action": "start_camera", "camera_enabled": pipeline.camera_enabled}
-            pipeline.trigger_space()
-            return {"status": "ok", "action": "space"}
+            session = pipeline.get_or_create_session(session_id)
+            session.is_recognizing = not session.is_recognizing
+            if not session.is_recognizing:
+                session.tracker.reset()
+                session.recorder.cancel_gesture()
+            pipeline.recognition_enabled = session.is_recognizing
+            return {"status": "ok", "action": "space", "recognizing": session.is_recognizing}
         elif cmd == "clear":
+            session = pipeline.get_or_create_session(session_id)
+            session.sentence.clear()
+            session.tracker.reset()
+            session.recorder.cancel_gesture()
             pipeline.clear_sentence_now()
             return {"status": "ok", "action": "clear"}
         elif cmd == "speak":
@@ -1048,7 +1375,12 @@ def create_app(
 
     # 8. Client Frame Injection API (Webcam từ trình duyệt từ xa gửi về AI)
     @app.post("/api/client_frame")
-    async def post_client_frame(request: Request, signer: str = Query(None)):
+    async def post_client_frame(
+        request: Request,
+        signer: str = Query(None),
+        recognizing: bool = Query(False),
+        session_id: str = Query("default"),
+    ):
         content_type = request.headers.get("content-type", "")
         img_bytes = None
         if "application/json" in content_type:
@@ -1057,6 +1389,10 @@ def create_app(
                 img_b64 = body.get("image", "")
                 if signer is None:
                     signer = body.get("signer", None)
+                if "recognizing" in body:
+                    recognizing = bool(body.get("recognizing", False))
+                if "session_id" in body:
+                    session_id = str(body.get("session_id", session_id))
                 if "," in img_b64:
                     img_b64 = img_b64.split(",", 1)[1]
                 import base64
@@ -1070,45 +1406,40 @@ def create_app(
             nparr = np.frombuffer(img_bytes, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if frame is not None:
-                pipeline.inject_external_frame(frame, signer=signer)
-                return {
-                    "status": "ok",
-                    "hands": pipeline.hands_count,
-                    "in_segment": pipeline.in_segment,
-                    "fps": round(pipeline.fps, 1),
-                    "camera": pipeline.current_camera_name,
-                    "camera_enabled": pipeline.camera_enabled,
-                    "rec_mode": pipeline.rec_mode,
-                    "skeleton": getattr(pipeline, "latest_skeleton_payload", None) if pipeline.show_hands else None,
-                    "decision": pipeline.latest_decision if pipeline.latest_decision else None,
-                    "sentence": list(pipeline.sentence),
-                }
+                session = pipeline.get_or_create_session(session_id, signer_name=signer)
+                res = session.process_frame(frame, is_recognizing=recognizing)
+                return res
         return JSONResponse({"status": "error", "detail": "Invalid frame"}, status_code=400)
 
     # 9. WebSocket Client Stream (Tốc độ cao cho Client Webcam)
     @app.websocket("/api/ws/client_feed")
-    async def websocket_client_feed(websocket: WebSocket):
+    async def websocket_client_feed(
+        websocket: WebSocket,
+        signer: str = Query("Khách"),
+        recognizing: bool = Query(False),
+        session_id: str = Query("default"),
+    ):
         await websocket.accept()
+        session = pipeline.get_or_create_session(session_id, signer_name=signer)
+        session.is_recognizing = recognizing
         try:
             while True:
-                data = await websocket.receive_bytes()
-                if data:
-                    nparr = np.frombuffer(data, np.uint8)
+                message = await websocket.receive()
+                if "bytes" in message and message["bytes"]:
+                    nparr = np.frombuffer(message["bytes"], np.uint8)
                     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                     if frame is not None:
-                        pipeline.inject_external_frame(frame)
-                        await websocket.send_json({
-                            "type": "telemetry",
-                            "hands": pipeline.hands_count,
-                            "in_segment": pipeline.in_segment,
-                            "fps": round(pipeline.fps, 1),
-                            "camera": pipeline.current_camera_name,
-                            "camera_enabled": pipeline.camera_enabled,
-                            "rec_mode": pipeline.rec_mode,
-                            "skeleton": getattr(pipeline, "latest_skeleton_payload", None) if pipeline.show_hands else None,
-                            "decision": pipeline.latest_decision if pipeline.latest_decision else None,
-                            "sentence": list(pipeline.sentence),
-                        })
+                        res = session.process_frame(frame, is_recognizing=session.is_recognizing)
+                        await websocket.send_json(res)
+                elif "text" in message and message["text"]:
+                    try:
+                        ctl = json.loads(message["text"])
+                        if "recognizing" in ctl:
+                            session.is_recognizing = bool(ctl["recognizing"])
+                        if "signer" in ctl:
+                            session.signer_name = str(ctl["signer"]).strip() or "Khách"
+                    except Exception:
+                        pass
         except WebSocketDisconnect:
             pass
         except Exception:
