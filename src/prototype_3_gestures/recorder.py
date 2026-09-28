@@ -223,6 +223,7 @@ class SaveTask:
     fps: float
     record_mode: str = "both"
     signer_name: str = "guest"
+    target_gesture: str | None = None
 
 
 class GestureVideoRecorder:
@@ -300,6 +301,7 @@ class GestureVideoRecorder:
         labels: list[str] | None = None,
         duration: float = 0.0,
         signer_name: str | None = None,
+        target_gesture: str | None = None,
     ) -> None:
         """Chốt cử chỉ và đẩy sang background worker để xuất video kèm chẩn đoán."""
         if not self.enabled:
@@ -353,6 +355,7 @@ class GestureVideoRecorder:
             fps=self.fps,
             record_mode=self.record_mode,
             signer_name=clean_signer,
+            target_gesture=target_gesture,
         )
         self._task_queue.put(task)
 
@@ -604,11 +607,19 @@ class GestureVideoRecorder:
         conf_tag = f"{int(round(task.confidence * 100))}pct"
         signer_slug = slugify(task.signer_name) if task.signer_name and task.signer_name.lower() != "guest" else ""
 
+        # Xác định thư mục lưu trữ theo từng cử chỉ luyện tập (nếu có)
+        target_gesture_slug = slugify(task.target_gesture) if task.target_gesture and str(task.target_gesture).strip() else ""
+        if target_gesture_slug:
+            save_dir = task.output_dir / target_gesture_slug
+            save_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            save_dir = task.output_dir
+
         if signer_slug:
             base_name = f"{timestamp_str}_{signer_slug}_{status_tag}_{label_slug}_{conf_tag}"
         else:
             base_name = f"{timestamp_str}_{status_tag}_{label_slug}_{conf_tag}"
-        meta_path = task.output_dir / f"{base_name}.json"
+        meta_path = save_dir / f"{base_name}.json"
 
         # Tính toán tỷ lệ phát hiện tay để phân tích
         total_frames = len(task.frames)
@@ -634,8 +645,8 @@ class GestureVideoRecorder:
         save_skeleton = task.record_mode in ("both", "skeleton")
         save_raw = task.record_mode in ("both", "raw")
 
-        skeleton_path = task.output_dir / f"{base_name}_skeleton.mp4"
-        raw_path = task.output_dir / f"{base_name}_raw.mp4"
+        skeleton_path = save_dir / f"{base_name}_skeleton.mp4"
+        raw_path = save_dir / f"{base_name}_raw.mp4"
 
         def create_writer(path: Path) -> tuple[cv2.VideoWriter | None, Path]:
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -724,6 +735,7 @@ class GestureVideoRecorder:
         metadata = {
             "timestamp": now_dt.isoformat(),
             "signer": task.signer_name,
+            "target_gesture": task.target_gesture,
             "videos": saved_video_names,
             "status": status_tag,
             "label": task.label,
@@ -750,8 +762,9 @@ class GestureVideoRecorder:
             print(f"[RECORDER WARNING] Không thể lưu file metadata JSON: {exc}", file=sys.stderr)
 
         video_desc = " & ".join(saved_video_names)
+        folder_info = f" -> videos/{target_gesture_slug}/" if target_gesture_slug else ""
         print(
-            f"[RECORDER] Đã lưu video cử chỉ ({task.signer_name}): {video_desc} "
+            f"[RECORDER] Đã lưu video cử chỉ ({task.signer_name}){folder_info}: {video_desc} "
             f"({total_frames} frames @ {actual_fps:.1f} FPS chuẩn thực tế, {task.duration_seconds:.2f}s) -> {status_tag} {task.label} ({task.confidence:.1%})"
         )
 
@@ -759,8 +772,8 @@ class GestureVideoRecorder:
         hf_token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or "").strip()
         hf_dataset = (os.environ.get("HF_DATASET_REPO") or "ntbii305/vslr-remote").strip()
         if hf_token and hf_dataset:
-            folder_slug = signer_slug or "guest"
-            files_to_upload = [meta_path] + [task.output_dir / name for name in saved_video_names]
+            folder_slug = f"{target_gesture_slug}/{signer_slug or 'guest'}" if target_gesture_slug else (signer_slug or "guest")
+            files_to_upload = [meta_path] + [save_dir / name for name in saved_video_names]
             self._upload_to_huggingface_async(
                 token=hf_token,
                 repo_id=hf_dataset,

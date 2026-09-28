@@ -94,16 +94,69 @@
           </div>
           <div class="signer-storage-status">
             <span class="storage-indicator-dot" id="backendConnDot"></span>
-            <span id="backendConnText">Kho lưu video: <strong>ntbii305/vslr-remote</strong></span>
+            <span id="backendConnText">Thư mục lưu: <strong id="currentTargetFolderText">videos/xin_chao/</strong></span>
           </div>
         </div>
 
-        <!-- Full-Width Camera Studio (Predicted Text Overlay Inside Camera) -->
-        <div class="translation-dual-box single-column-studio">
+        <!-- Practice Gesture Selector Bar (Chọn bài học 24 cử chỉ ngay tại chỗ) -->
+        <div class="signer-bar-card practice-selector-bar">
+          <div class="d-flex align-items-center gap-2 flex-grow-1 flex-wrap">
+            <span class="fs-5">🎯</span>
+            <label for="practiceGestureSelect" class="signer-label">Cử chỉ đang học:</label>
+            <select id="practiceGestureSelect" class="signer-name-input fw-bold" style="max-width: 340px; cursor: pointer;">
+              <!-- Populated by JavaScript -->
+            </select>
+          </div>
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <button class="pill-toggle-btn px-3 py-2" id="btnPrevGesture" title="Cử chỉ trước">◀ Trước</button>
+            <button class="pill-toggle-btn px-3 py-2" id="btnNextGesture" title="Cử chỉ tiếp theo">Tiếp ▶</button>
+            <button class="pill-toggle-btn active px-3 py-2" id="btnToggleTutorialPanel" title="Ẩn/Hiện Video Hướng Dẫn">🎬 Video Mẫu: HIỆN</button>
+          </div>
+        </div>
+
+        <!-- Split Studio: Tutorial Video + Live Webcam Side-by-Side -->
+        <div class="translation-dual-box practice-split-studio" id="practiceStudioBox">
+
+          <!-- Left / Top Panel: Tutorial Video Guide -->
+          <div class="trans-card tutorial-guide-card" id="tutorialGuideCard">
+            <div class="card-column-header mb-2">
+              <div class="d-flex align-items-center gap-2">
+                <span class="fs-3" id="studyGestureIcon">👋</span>
+                <div>
+                  <h2 class="card-column-title mb-0" id="studyGestureTitle">Xin chào</h2>
+                  <span class="text-muted small" id="studyCatBadge">Giao tiếp • Signer P01</span>
+                </div>
+              </div>
+              <button class="btn-tts-speak btn-sm py-1 px-3" id="btnStudySpeakSample" title="Nghe phát âm mẫu">🔊 Nghe mẫu</button>
+            </div>
+
+            <div class="tutorial-video-frame mb-2">
+              <video id="studyTutorialVideo" playsinline loop muted autoplay controls preload="metadata"></video>
+            </div>
+
+            <div class="tutorial-video-toolbar mb-2">
+              <div class="speed-selector">
+                <span class="speed-lbl">Tốc độ mẫu:</span>
+                <button class="speed-btn study-speed-btn" data-speed="0.5">0.5x (Chậm)</button>
+                <button class="speed-btn study-speed-btn" data-speed="0.75">0.75x</button>
+                <button class="speed-btn study-speed-btn active" data-speed="1.0">1.0x (Chuẩn)</button>
+              </div>
+            </div>
+
+            <div class="detail-info-box mb-2 py-2 px-3">
+              <h4 class="mb-1">📖 Cách thực hiện:</h4>
+              <p class="mb-0 small" id="studyGestureDesc">Bàn tay mở, lòng bàn tay hướng về phía trước...</p>
+            </div>
+            <div class="detail-info-box detail-tip-box py-2 px-3">
+              <h4 class="mb-1">💡 Mẹo chuẩn VSLR:</h4>
+              <p class="mb-0 small" id="studyGestureTip">Giữ cánh tay góc 90 độ, vẫy 2 nhịp dứt khoát.</p>
+            </div>
+          </div>
 
           <div class="trans-card video-card">
             <div class="card-column-header">
-              <h2 class="card-column-title">Camera Nhận Diện</h2>
+              <h2 class="card-column-title">Camera Thực Hành</h2>
+              <span class="badge bg-info-subtle text-info-emphasis rounded-pill px-3 py-2" id="practiceMatchBadge">Đang tập: Xin chào</span>
             </div>
 
             <div class="video-display-area" id="cameraViewport">

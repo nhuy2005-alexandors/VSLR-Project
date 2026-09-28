@@ -85,6 +85,9 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionId: clientSessionId,
     signerName: localStorage.getItem('vslr_signer_name') || '',
     isRecognizing: false, // Mặc định mở camera CHƯA nhận diện liền, chờ bấm nút bắt đầu
+    targetGestureIndex: 0,
+    targetGestureId: 'xin_chao',
+    showTutorialPanel: true,
     sentence: [],
     recMode: 'auto',       // 'auto' | 'manual'
     showHands: true,
@@ -119,6 +122,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const hudVoiceStatus = document.getElementById('hudVoiceStatus');
   const signerNameInput = document.getElementById('signerNameInput');
   const signerSavedBadge = document.getElementById('signerSavedBadge');
+  const practiceGestureSelect = document.getElementById('practiceGestureSelect');
+  const btnPrevGesture = document.getElementById('btnPrevGesture');
+  const btnNextGesture = document.getElementById('btnNextGesture');
+  const btnToggleTutorialPanel = document.getElementById('btnToggleTutorialPanel');
+  const studyGestureIcon = document.getElementById('studyGestureIcon');
+  const studyGestureTitle = document.getElementById('studyGestureTitle');
+  const studyCatBadge = document.getElementById('studyCatBadge');
+  const studyTutorialVideo = document.getElementById('studyTutorialVideo');
+  const studyGestureDesc = document.getElementById('studyGestureDesc');
+  const studyGestureTip = document.getElementById('studyGestureTip');
+  const btnStudySpeakSample = document.getElementById('btnStudySpeakSample');
+  const practiceMatchBadge = document.getElementById('practiceMatchBadge');
+  const currentTargetFolderText = document.getElementById('currentTargetFolderText');
+  const tutorialGuideCard = document.getElementById('tutorialGuideCard');
+  const practiceStudioBox = document.getElementById('practiceStudioBox');
   const recentGesturesHistory = [];
 
   // Khởi tạo & đồng bộ tên người thử nghiệm (Signer Name)
@@ -142,6 +160,97 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 350);
     });
   }
+
+  // =========================================================================
+  // 2B. PRACTICE & LEARNING STUDIO (Video mẫu hướng dẫn nằm cạnh Webcam)
+  // =========================================================================
+  function setPracticeGesture(idx) {
+    const cleanIdx = ((idx % GESTURE_DATA.length) + GESTURE_DATA.length) % GESTURE_DATA.length;
+    state.targetGestureIndex = cleanIdx;
+    const g = GESTURE_DATA[cleanIdx];
+    state.targetGestureId = g.id;
+
+    if (practiceGestureSelect) practiceGestureSelect.value = g.id;
+    if (studyGestureIcon) studyGestureIcon.textContent = g.icon;
+    if (studyGestureTitle) studyGestureTitle.textContent = g.name;
+    if (studyCatBadge) studyCatBadge.textContent = `${g.cat} • Signer ${g.signer}`;
+    if (studyGestureDesc) studyGestureDesc.textContent = g.desc;
+    if (studyGestureTip) studyGestureTip.textContent = g.tip;
+    if (currentTargetFolderText) currentTargetFolderText.textContent = `videos/${g.id}/`;
+
+    if (practiceMatchBadge) {
+      practiceMatchBadge.className = 'badge bg-info-subtle text-info-emphasis rounded-pill px-3 py-2';
+      practiceMatchBadge.textContent = `Đang tập: ${g.name}`;
+    }
+
+    if (studyTutorialVideo) {
+      studyTutorialVideo.poster = g.thumb;
+      studyTutorialVideo.src = g.video;
+      studyTutorialVideo.currentTime = 0;
+      studyTutorialVideo.playbackRate = state.currentSpeed || 1.0;
+      studyTutorialVideo.play().catch(() => {});
+    }
+
+    // Đồng bộ cử chỉ đang luyện tập về Backend để lưu đúng thư mục videos/<gesture_id>/
+    fetch(`${API_BASE}/api/action?action=set_target_gesture&target_gesture=${encodeURIComponent(g.id)}&session_id=${encodeURIComponent(state.sessionId)}`, {
+      method: 'POST'
+    }).catch(() => {});
+    if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({ target_gesture: g.id }));
+    }
+  }
+
+  if (practiceGestureSelect) {
+    practiceGestureSelect.innerHTML = GESTURE_DATA.map((g, i) => `
+      <option value="${g.id}">${i + 1}/24: ${g.icon} ${g.name} (${g.cat})</option>
+    `).join('');
+    practiceGestureSelect.addEventListener('change', (e) => {
+      const idx = GESTURE_DATA.findIndex(item => item.id === e.target.value);
+      if (idx >= 0) setPracticeGesture(idx);
+    });
+  }
+
+  btnPrevGesture?.addEventListener('click', () => {
+    setPracticeGesture(state.targetGestureIndex - 1);
+  });
+
+  btnNextGesture?.addEventListener('click', () => {
+    setPracticeGesture(state.targetGestureIndex + 1);
+  });
+
+  btnToggleTutorialPanel?.addEventListener('click', () => {
+    state.showTutorialPanel = !state.showTutorialPanel;
+    if (tutorialGuideCard) {
+      tutorialGuideCard.style.display = state.showTutorialPanel ? 'flex' : 'none';
+    }
+    if (practiceStudioBox) {
+      practiceStudioBox.classList.toggle('single-column-studio', !state.showTutorialPanel);
+    }
+    if (btnToggleTutorialPanel) {
+      btnToggleTutorialPanel.classList.toggle('active', state.showTutorialPanel);
+      btnToggleTutorialPanel.textContent = state.showTutorialPanel ? '🎬 Video Mẫu: HIỆN' : '🎬 Video Mẫu: ẨN';
+    }
+  });
+
+  btnStudySpeakSample?.addEventListener('click', () => {
+    const g = GESTURE_DATA[state.targetGestureIndex];
+    if (g) {
+      lastSpokenTime = 0;
+      speakText(g.name);
+    }
+  });
+
+  document.querySelectorAll('.study-speed-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const spd = parseFloat(btn.dataset.speed) || 1.0;
+      state.currentSpeed = spd;
+      document.querySelectorAll('.study-speed-btn').forEach(b => b.classList.toggle('active', b === btn));
+      if (studyTutorialVideo) studyTutorialVideo.playbackRate = spd;
+    });
+  });
+
+  // Khởi tạo bài học đầu tiên (Xin chào)
+  setTimeout(() => setPracticeGesture(0), 50);
 
   // =========================================================================
   // 3. NAVIGATION
@@ -813,6 +922,18 @@ document.addEventListener('DOMContentLoaded', () => {
             recStatusText.textContent = `ĐÃ DỊCH: ${data.label} (${data.confidence}%)`;
           }
 
+          // Kiểm tra và hiển thị kết quả chúc mừng nếu làm đúng cử chỉ đang luyện tập
+          const curG = GESTURE_DATA[state.targetGestureIndex];
+          if (curG && data.label && data.label.toLowerCase().trim() === curG.name.toLowerCase().trim()) {
+            if (practiceMatchBadge) {
+              practiceMatchBadge.className = 'badge bg-success rounded-pill px-3 py-2 animate__pulse';
+              practiceMatchBadge.textContent = `🎉 CHÍNH XÁC: ${data.label} (${data.confidence}%)`;
+            }
+          } else if (practiceMatchBadge && curG) {
+            practiceMatchBadge.className = 'badge bg-warning text-dark rounded-pill px-3 py-2';
+            practiceMatchBadge.textContent = `💡 Phát hiện: ${data.label} (${data.confidence}%) — Đang tập: ${curG.name}`;
+          }
+
           // Phát âm trên loa thiết bị người dùng (đặc biệt khi truy cập từ xa)
           speakText(data.label);
         } else {
@@ -1150,9 +1271,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btnDetailPractice')?.addEventListener('click', () => {
+    const targetId = activeModalGesture ? activeModalGesture.id : 'xin_chao';
     closeGestureDetail();
+    const targetIdx = GESTURE_DATA.findIndex(g => g.id === targetId);
+    if (targetIdx >= 0) setPracticeGesture(targetIdx);
     navigateToView('view-translate');
-    triggerBackendAction('start_camera');
+    if (!state.cameraEnabled) toggleCameraAction();
   });
 
   // Đóng modal khi click ra nền ngoài hoặc nhấn ESC

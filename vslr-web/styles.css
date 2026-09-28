@@ -2042,6 +2042,15 @@ kbd {
    10. FULL-WIDTH CAMERA STUDIO & LIVE PREDICTION OVERLAY
    ========================================================================== */
 
+.practice-split-studio {
+  display: grid;
+  grid-template-columns: minmax(340px, 1fr) minmax(460px, 1.35fr);
+  gap: 22px;
+  width: 100%;
+  margin: 0 auto 20px;
+  align-items: start;
+}
+
 .single-column-studio {
   grid-template-columns: 1fr !important;
   width: 100% !important;
@@ -2057,6 +2066,10 @@ kbd {
   aspect-ratio: 16 / 9;
   min-height: 520px;
   max-height: 680px;
+}
+
+.tutorial-guide-card {
+  height: 100%;
 }
 
 /* Subtitle / Live Predicted Text Overlay Floating Inside Camera Viewport */
@@ -2169,11 +2182,12 @@ kbd {
     font-size: 18px !important;
   }
 
-  /* Khung Camera Full Màn hình điện thoại (chiếm ~65vh chiều cao màn hình) */
-  .single-column-studio .video-display-area {
-    min-height: 60vh !important;
-    max-height: 72vh !important;
-    height: 65vh !important;
+  /* Khung Camera Full Màn hình điện thoại (chiếm ~60vh chiều cao màn hình) */
+  .single-column-studio .video-display-area,
+  .practice-split-studio .video-display-area {
+    min-height: 55vh !important;
+    max-height: 70vh !important;
+    height: 60vh !important;
     aspect-ratio: auto !important;
     width: 100% !important;
     border-radius: 14px !important;

@@ -115,6 +115,7 @@ class ClientAISession:
         )
         self.sentence: list[str] = []
         self.is_recognizing: bool = False  # Mặc định bật camera chưa nhận diện liền
+        self.target_gesture: str | None = "xin_chao"  # Cử chỉ đang học / luyện tập
         self.decision_seq: int = 0
         self.latest_decision: dict[str, Any] = {}
         self.last_accepted_label: str | None = None
@@ -130,11 +131,13 @@ class ClientAISession:
         self.last_frame_hash: int | None = None
         self.last_active_time: float = time.monotonic()
 
-    def process_frame(self, frame: np.ndarray, is_recognizing: bool, signer_name: str | None = None) -> dict[str, Any]:
+    def process_frame(self, frame: np.ndarray, is_recognizing: bool, signer_name: str | None = None, target_gesture: str | None = None) -> dict[str, Any]:
         now = time.monotonic()
         self.last_active_time = now
         if signer_name and signer_name.strip():
             self.signer_name = signer_name.strip()
+        if target_gesture and str(target_gesture).strip():
+            self.target_gesture = str(target_gesture).strip()
         self.is_recognizing = is_recognizing
 
         # Tính FPS riêng của phiên này
@@ -307,6 +310,7 @@ class ClientAISession:
                 labels=self.pipeline.labels,
                 duration=segment.duration,
                 signer_name=self.signer_name,
+                target_gesture=self.target_gesture or decision.label,
             )
 
         self.decision_seq += 1
@@ -467,6 +471,7 @@ class RealtimeVSLRPipeline:
         self.session_extractor_lock = threading.Lock()
         self.client_sessions: dict[str, ClientAISession] = {}
         self.recognition_enabled: bool = False
+        self.target_gesture: str | None = "xin_chao"
 
     def get_or_create_session(self, session_id: str, signer_name: str | None = None) -> ClientAISession:
         clean_id = (session_id or "").strip() or "default"
@@ -700,6 +705,7 @@ class RealtimeVSLRPipeline:
                 labels=self.labels,
                 duration=segment.duration,
                 signer_name=self.current_signer,
+                target_gesture=getattr(self, "target_gesture", None) or decision.label,
             )
             status_desc = "ACCEPTED" if decision.accepted else "REJECTED"
             self.last_saved_info = f"Đã lưu video: {decision.label} [{status_desc}]"
@@ -1170,9 +1176,20 @@ def create_app(
 
     # 3. Action API (Space, Clear, Speak, Toggle Hands, Toggle Mode, Start/Stop Camera)
     @app.post("/api/action")
-    async def trigger_action(action: str = Query(...), client_mode: bool = Query(False), session_id: str = Query("default")):
+    async def trigger_action(
+        action: str = Query(...),
+        client_mode: bool = Query(False),
+        session_id: str = Query("default"),
+        target_gesture: str = Query(None),
+    ):
         cmd = action.split("&")[0].lower().strip()
-        if cmd == "start_camera":
+        if target_gesture:
+            pipeline.target_gesture = target_gesture.strip()
+            sess = pipeline.get_or_create_session(session_id)
+            sess.target_gesture = target_gesture.strip()
+        if cmd == "set_target_gesture":
+            return {"status": "ok", "action": "set_target_gesture", "target_gesture": pipeline.target_gesture}
+        elif cmd == "start_camera":
             ok = pipeline.start_camera(client_mode=client_mode)
             return {"status": "ok", "action": "start_camera", "camera_enabled": ok}
         elif cmd == "stop_camera":
@@ -1364,6 +1381,7 @@ def create_app(
         signer: str = Query(None),
         recognizing: bool = Query(False),
         session_id: str = Query("default"),
+        target_gesture: str = Query(None),
     ):
         content_type = request.headers.get("content-type", "")
         img_bytes = None
@@ -1377,6 +1395,8 @@ def create_app(
                     recognizing = bool(body.get("recognizing", False))
                 if "session_id" in body:
                     session_id = str(body.get("session_id", session_id))
+                if "target_gesture" in body:
+                    target_gesture = str(body.get("target_gesture", ""))
                 if "," in img_b64:
                     img_b64 = img_b64.split(",", 1)[1]
                 import base64
@@ -1391,7 +1411,7 @@ def create_app(
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if frame is not None:
                 session = pipeline.get_or_create_session(session_id, signer_name=signer)
-                res = session.process_frame(frame, is_recognizing=recognizing)
+                res = session.process_frame(frame, is_recognizing=recognizing, target_gesture=target_gesture)
                 return res
         return JSONResponse({"status": "error", "detail": "Invalid frame"}, status_code=400)
 
@@ -1402,10 +1422,13 @@ def create_app(
         signer: str = Query("Khách"),
         recognizing: bool = Query(False),
         session_id: str = Query("default"),
+        target_gesture: str = Query("xin_chao"),
     ):
         await websocket.accept()
         session = pipeline.get_or_create_session(session_id, signer_name=signer)
         session.is_recognizing = recognizing
+        if target_gesture:
+            session.target_gesture = target_gesture
         try:
             while True:
                 message = await websocket.receive()
@@ -1422,6 +1445,9 @@ def create_app(
                             session.is_recognizing = bool(ctl["recognizing"])
                         if "signer" in ctl:
                             session.signer_name = str(ctl["signer"]).strip() or "Khách"
+                        if "target_gesture" in ctl:
+                            session.target_gesture = str(ctl["target_gesture"]).strip()
+                            pipeline.target_gesture = session.target_gesture
                     except Exception:
                         pass
         except WebSocketDisconnect:
