@@ -245,7 +245,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // =========================================================================
   async function triggerBackendAction(actionName) {
     try {
-      const res = await fetch(`${API_BASE}/api/action?action=${encodeURIComponent(actionName)}`, {
+      const parts = String(actionName).split('&');
+      const mainAction = parts[0];
+      const extra = parts.slice(1).map(p => '&' + p).join('');
+      const url = `${API_BASE}/api/action?action=${encodeURIComponent(mainAction)}&session_id=${encodeURIComponent(state.sessionId)}${extra}`;
+      const res = await fetch(url, {
         method: 'POST'
       });
       return await res.json();
@@ -755,42 +759,18 @@ document.addEventListener('DOMContentLoaded', () => {
           hudHandsStatus.style.color = data.hands_count > 0 ? '#38bdf8' : '#94a3b8';
         }
 
-        // Cập nhật trạng thái ghi nhận cử chỉ
-        if (data.in_segment) {
-          recStatusTag?.classList.add('active');
-          if (recStatusText) {
-            recStatusText.textContent = data.rec_mode === 'manual'
-              ? `ĐANG GHI: ${data.rec_elapsed}s`
-              : 'ĐANG GHI CỬ CHỈ...';
-          }
-          if (btnMainToggleTranslate) {
-            btnMainToggleTranslate.textContent = '[# DỪNG & DỊCH (SPACE)]';
-            btnMainToggleTranslate.classList.add('stopping');
+        // Cập nhật trạng thái ghi nhận cử chỉ nếu người dùng đã bật nhận diện
+        if (state.isRecognizing) {
+          if (data.in_segment) {
+            recStatusTag?.classList.add('active');
+            if (recStatusText) recStatusText.textContent = '🔴 ĐANG GHI CỬ CHỈ...';
+          } else {
+            recStatusTag?.classList.remove('active');
+            if (recStatusText) recStatusText.textContent = '🟢 ĐANG NHẬN DIỆN (Sẵn sàng dơ tay)';
           }
         } else {
           recStatusTag?.classList.remove('active');
-          if (recStatusText) {
-            recStatusText.textContent = data.rec_mode === 'manual'
-              ? 'SẴN SÀNG (SPACE)'
-              : 'TỰ ĐỘNG (Continuous)';
-          }
-          if (btnMainToggleTranslate) {
-            btnMainToggleTranslate.textContent = '[> BẮT ĐẦU GHI (SPACE)]';
-            btnMainToggleTranslate.classList.remove('stopping');
-          }
-        }
-        break;
-
-      case 'prediction_preview':
-        if (heroPredictedWord) {
-          heroPredictedWord.textContent = data.label;
-          heroPredictedWord.style.opacity = '0.85';
-        }
-        if (predConfVal) {
-          predConfVal.textContent = `${data.confidence}% (Đang nhận diện...)`;
-        }
-        if (recStatusText) {
-          recStatusText.textContent = `ĐANG NHẬN DIỆN: ${data.label} (${data.confidence}%)`;
+          if (recStatusText) recStatusText.textContent = '⚪ ĐÃ BẬT CAMERA (Chờ bấm Bắt đầu)';
         }
         break;
 

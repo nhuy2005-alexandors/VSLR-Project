@@ -839,11 +839,6 @@ class RealtimeVSLRPipeline:
                 time.sleep(0.04)
                 continue
 
-            # Nếu đang có luồng frame từ trình duyệt (client feed) trong 3s qua, nhường luồng AI cho client
-            if (time.monotonic() - getattr(self, "last_external_frame_time", 0.0)) < 3.0:
-                time.sleep(0.02)
-                continue
-
             with self.camera_lock:
                 if self.cap is None or not self.cap.isOpened():
                     time.sleep(0.04)
@@ -1187,7 +1182,7 @@ def create_app(
     # 3. Action API (Space, Clear, Speak, Toggle Hands, Toggle Mode, Start/Stop Camera)
     @app.post("/api/action")
     async def trigger_action(action: str = Query(...), client_mode: bool = Query(False), session_id: str = Query("default")):
-        cmd = action.lower().strip()
+        cmd = action.split("&")[0].lower().strip()
         if cmd == "start_camera":
             ok = pipeline.start_camera(client_mode=client_mode)
             return {"status": "ok", "action": "start_camera", "camera_enabled": ok}
