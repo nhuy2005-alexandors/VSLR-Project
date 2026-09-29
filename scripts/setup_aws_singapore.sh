@@ -49,8 +49,10 @@ if ! command -v uv >/dev/null 2>&1 && [ ! -f "$HOME/.local/bin/uv" ]; then
 fi
 export PATH="$HOME/.local/bin:$PATH"
 
-rm -rf venv
-uv venv --python 3.11 venv
+if [ ! -f "venv/bin/python" ] || ! ./venv/bin/python --version 2>&1 | grep -q "3.11"; then
+    rm -rf venv
+    uv venv --python 3.11 venv
+fi
 source venv/bin/activate
 uv pip install -r requirements.txt
 
@@ -77,7 +79,11 @@ export PYTHONPATH="$PWD/src:$PYTHONPATH"
 echo ""
 echo "[4/4] Đang khởi động AI Server và tạo đường hầm Cloudflare HTTPS..."
 python3 -c "
-import subprocess, re, time, os, threading
+import subprocess, re, time, os, threading, sys, types
+try:
+    import sounddevice
+except Exception:
+    sys.modules['sounddevice'] = types.ModuleType('sounddevice')
 
 def run_uvicorn():
     import uvicorn

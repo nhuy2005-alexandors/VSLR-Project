@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import sys
+import types
 import cv2
+try:
+    import sounddevice
+except Exception:
+    sys.modules["sounddevice"] = types.ModuleType("sounddevice")
 import mediapipe as mp
 import numpy as np
 

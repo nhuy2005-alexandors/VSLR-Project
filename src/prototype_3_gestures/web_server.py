@@ -24,6 +24,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
+try:
+    import sounddevice
+except Exception:
+    import types
+    sys.modules["sounddevice"] = types.ModuleType("sounddevice")
 import mediapipe as mp
 
 from .vsl3.console import configure_utf8_stdio

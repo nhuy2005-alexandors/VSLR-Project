@@ -15,6 +15,11 @@ import sys
 from typing import Any
 
 import cv2
+try:
+    import sounddevice
+except Exception:
+    import types
+    sys.modules["sounddevice"] = types.ModuleType("sounddevice")
 import mediapipe as mp
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
