@@ -555,13 +555,7 @@ class RealtimeVSLRPipeline:
             self.tracker.reset()
             self.in_segment = False
             self.hands_count = 0
-            self.broadcast_event({
-                "type": "camera_state",
-                "enabled": True,
-                "index": -1,
-                "name": self.current_camera_name,
-                "client_mode": True,
-            })
+            # Không phát broadcast camera_state khi dùng client_mode để tránh làm đổi trạng thái camera của người khác
             return True
 
         if self.camera_enabled and self.cap is not None and self.cap.isOpened():

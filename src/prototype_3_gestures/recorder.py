@@ -609,10 +609,16 @@ class GestureVideoRecorder:
         conf_tag = f"{int(round(task.confidence * 100))}pct"
         signer_slug = slugify(task.signer_name) if task.signer_name and task.signer_name.lower() != "guest" else ""
 
-        # Xác định thư mục lưu trữ theo từng cử chỉ luyện tập (nếu có)
+        # Xác định thư mục lưu trữ: videos/<tên_người_test>/<tên_cử_chỉ>/
         target_gesture_slug = slugify(task.target_gesture) if task.target_gesture and str(task.target_gesture).strip() else ""
         if target_gesture_slug:
-            save_dir = task.output_dir / target_gesture_slug
+            if signer_slug:
+                save_dir = task.output_dir / signer_slug / target_gesture_slug
+            else:
+                save_dir = task.output_dir / target_gesture_slug
+            save_dir.mkdir(parents=True, exist_ok=True)
+        elif signer_slug:
+            save_dir = task.output_dir / signer_slug
             save_dir.mkdir(parents=True, exist_ok=True)
         else:
             save_dir = task.output_dir
@@ -764,9 +770,9 @@ class GestureVideoRecorder:
             print(f"[RECORDER WARNING] Không thể lưu file metadata JSON: {exc}", file=sys.stderr)
 
         video_desc = " & ".join(saved_video_names)
-        folder_info = f" -> videos/{target_gesture_slug}/" if target_gesture_slug else ""
+        rel_folder = f"{signer_slug or 'guest'}/{target_gesture_slug}" if target_gesture_slug else (signer_slug or "guest")
         print(
-            f"[RECORDER] Đã lưu video cử chỉ ({task.signer_name}){folder_info}: {video_desc} "
+            f"[RECORDER] Đã lưu video cử chỉ ({task.signer_name}) -> videos/{rel_folder}/: {video_desc} "
             f"({total_frames} frames @ {actual_fps:.1f} FPS chuẩn thực tế, {task.duration_seconds:.2f}s) -> {status_tag} {task.label} ({task.confidence:.1%})"
         )
 
@@ -774,7 +780,7 @@ class GestureVideoRecorder:
         hf_token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or "").strip()
         hf_dataset = (os.environ.get("HF_DATASET_REPO") or "ntbii305/vslr-remote").strip()
         if hf_token and hf_dataset:
-            folder_slug = f"{target_gesture_slug}/{signer_slug or 'guest'}" if target_gesture_slug else (signer_slug or "guest")
+            folder_slug = rel_folder
             files_to_upload = [meta_path] + [save_dir / name for name in saved_video_names]
             self._upload_to_huggingface_async(
                 token=hf_token,
