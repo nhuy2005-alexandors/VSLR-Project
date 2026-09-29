@@ -113,6 +113,106 @@ def extract_raw_hand_coords(res: Any) -> list[tuple[float, float]]:
     return pts
 
 
+def evaluate_gesture_activity(
+    res: Any,
+    now: float,
+    history: deque,
+    in_segment: bool,
+    still_since: float | None,
+) -> tuple[bool, float | None]:
+    """Kiểm tra hoạt động ký hiệu chính xác, loại bỏ 100% hiện tượng nhảy đỏ khi đứng yên hoặc buông thõng tay."""
+    if res is None:
+        history.clear()
+        return False, None
+
+    pose_lms = getattr(res, "pose_landmarks", None)
+    left_hand = getattr(res, "left_hand_landmarks", None)
+    right_hand = getattr(res, "right_hand_landmarks", None)
+
+    # 1. Trích xuất tọa độ cổ tay và các ngón tay của từng bên độc lập
+    left_pts: list[tuple[float, float]] = []
+    right_pts: list[tuple[float, float]] = []
+    wrist_ys: list[float] = []
+
+    if left_hand and left_hand.landmark:
+        wrist_ys.append(float(left_hand.landmark[0].y))
+        for idx in (0, 5, 9, 17):
+            lm = left_hand.landmark[idx]
+            left_pts.append((float(lm.x), float(lm.y)))
+
+    if right_hand and right_hand.landmark:
+        wrist_ys.append(float(right_hand.landmark[0].y))
+        for idx in (0, 5, 9, 17):
+            lm = right_hand.landmark[idx]
+            right_pts.append((float(lm.x), float(lm.y)))
+
+    if pose_lms and pose_lms.landmark:
+        for p_idx in (15, 16):  # Cổ tay trái (15) và phải (16) trên pose
+            if len(pose_lms.landmark) > p_idx:
+                lm = pose_lms.landmark[p_idx]
+                if getattr(lm, "visibility", 1.0) > 0.35:
+                    wrist_ys.append(float(lm.y))
+
+    if not wrist_ys or (not left_pts and not right_pts):
+        history.clear()
+        return False, None
+
+    # 2. Ngưỡng độ cao: Xác định vị trí thắt lưng / hông (nhỏ hơn là cao hơn trên ảnh)
+    hip_y = 0.82
+    if pose_lms and pose_lms.landmark and len(pose_lms.landmark) > 24:
+        valid_hips = [
+            pose_lms.landmark[i].y
+            for i in (23, 24)
+            if getattr(pose_lms.landmark[i], "visibility", 1.0) > 0.30
+        ]
+        if valid_hips:
+            hip_y = float(np.mean(valid_hips))
+
+    highest_wrist_y = min(wrist_ys)
+    # Bàn tay phải được dơ lên trên hông/thắt lưng (y nhỏ hơn là cao hơn) VÀ không sát mép dưới màn hình
+    hand_is_raised = (highest_wrist_y < (hip_y - 0.035)) and (highest_wrist_y < 0.80)
+
+    if not hand_is_raised:
+        # Tay đang buông thõng hai bên đùi hoặc để dưới bàn -> DẬP TẮT NGAY, không bao giờ ghi nhận
+        history.clear()
+        return False, None
+
+    # 3. Tính toán chuyển động thực sự của từng bàn tay độc lập (chống so sánh chéo T và P)
+    history.append((now, left_pts, right_pts))
+    motion = 0.0
+
+    if len(history) >= 2:
+        _, prev_l, prev_r = history[0]
+        _, cur_l, cur_r = history[-1]
+
+        if len(prev_l) == len(cur_l) and len(cur_l) > 0:
+            diff_l = np.asarray(cur_l) - np.asarray(prev_l)
+            motion = max(motion, float(np.max(np.linalg.norm(diff_l, axis=1))))
+
+        if len(prev_r) == len(cur_r) and len(cur_r) > 0:
+            diff_r = np.asarray(cur_r) - np.asarray(prev_r)
+            motion = max(motion, float(np.max(np.linalg.norm(diff_r, axis=1))))
+
+    # 4. Máy trạng thái:
+    if not in_segment:
+        # Ở trạng thái chờ: Cần dơ tay lên và có chuyển động thực sự (>= 0.014) để bắt đầu
+        if motion >= 0.014:
+            return True, None
+        return False, None
+    else:
+        # Đang trong cử chỉ: Tiếp tục ghi nếu tay còn cử động hoặc vẫn dơ trong không gian ký hiệu
+        if motion >= 0.011:
+            return True, None
+        else:
+            if still_since is None:
+                return True, now
+            elif (now - still_since) >= 0.40:
+                # Tay đã dừng yên 0.40s -> Chốt cử chỉ
+                return False, None
+            else:
+                return True, still_since
+
+
 class ClientAISession:
     """Phiên AI độc lập cho từng người dùng (chống lẫn lộn frame và lặp frame khi nhiều người test cùng lúc)."""
 
@@ -120,7 +220,7 @@ class ClientAISession:
         self.session_id = session_id
         self.signer_name = signer_name or "Khách"
         self.pipeline = pipeline
-        self.tracker = SegmentTracker(pipeline.word_gap, pipeline.max_seconds, min_active_seconds=0.0)
+        self.tracker = SegmentTracker(pipeline.word_gap, pipeline.max_seconds, min_active_seconds=0.10)
         self.recorder = GestureVideoRecorder(
             record_dir=pipeline.record_dir,
             fps=30.0,
@@ -157,8 +257,9 @@ class ClientAISession:
 
         # Tính FPS riêng của phiên này
         self.frame_counter += 1
-        if now - self.fps_calc_time >= 1.0:
-            self.fps = self.frame_counter / (now - self.fps_calc_time)
+        elapsed_fps = now - self.fps_calc_time
+        if elapsed_fps >= 0.8:
+            self.fps = self.frame_counter / elapsed_fps
             self.frame_counter = 0
             self.fps_calc_time = now
 
@@ -220,49 +321,9 @@ class ClientAISession:
             }
 
         # Khi ĐÃ BẤM "BẮT ĐẦU NHẬN DIỆN":
-        current_raw_pts = extract_raw_hand_coords(res)
-        gesture_active = False
-
-        if current_raw_pts:
-            self.raw_hand_history.append((now, current_raw_pts))
-            recent_dist = 0.0
-            recent_upward = 0.0
-
-            if len(self.raw_hand_history) >= 2:
-                _, p0 = self.raw_hand_history[0]
-                _, p1 = self.raw_hand_history[-1]
-                if len(p0) == len(p1) and len(p0) > 0:
-                    diff = np.asarray(p1) - np.asarray(p0)
-                    recent_dist = float(np.max(np.linalg.norm(diff, axis=1)))
-                    recent_upward = float(np.max(np.asarray(p0)[:, 1] - np.asarray(p1)[:, 1]))
-                else:
-                    recent_dist = 0.03
-                    recent_upward = 0.03
-
-            hand_is_moving = (recent_upward >= 0.007) or (recent_dist >= 0.010)
-
-            if not self.in_segment:
-                if hand_is_moving:
-                    gesture_active = True
-                    self.still_since = None
-                else:
-                    gesture_active = False
-            else:
-                if recent_dist >= 0.009:
-                    gesture_active = True
-                    self.still_since = None
-                else:
-                    if self.still_since is None:
-                        self.still_since = now
-                        gesture_active = True
-                    elif (now - self.still_since) >= 0.35:
-                        gesture_active = False
-                    else:
-                        gesture_active = True
-        else:
-            self.raw_hand_history.clear()
-            self.still_since = None
-            gesture_active = False
+        gesture_active, self.still_since = evaluate_gesture_activity(
+            res, now, self.raw_hand_history, self.in_segment, self.still_since
+        )
 
         if not is_duplicate:
             done = self.tracker.feed(
@@ -940,56 +1001,10 @@ class RealtimeVSLRPipeline:
                 num_hands = int(obs.left_hand_present) + int(obs.right_hand_present)
                 self.hands_count = num_hands
 
-                # 3. Gesture tracking state machine:
-                # - Khi tay đứng yên: gesture_active = False -> STANDBY (không bao giờ bắt đầu cử chỉ)
-                # - Ngay khi tay dơ lên / bắt đầu chuyển động: gesture_active = True -> BẮT ĐẦU GHI NGAY
-                current_raw_pts = extract_raw_hand_coords(res)
-                gesture_active = False
-
-                if current_raw_pts:
-                    self.raw_hand_history.append((now, current_raw_pts))
-                    recent_dist = 0.0
-                    recent_upward = 0.0
-
-                    if len(self.raw_hand_history) >= 2:
-                        _, p0 = self.raw_hand_history[0]
-                        _, p1 = self.raw_hand_history[-1]
-                        if len(p0) == len(p1) and len(p0) > 0:
-                            diff = np.asarray(p1) - np.asarray(p0)
-                            recent_dist = float(np.max(np.linalg.norm(diff, axis=1)))
-                            recent_upward = float(np.max(np.asarray(p0)[:, 1] - np.asarray(p1)[:, 1]))
-                        else:
-                            recent_dist = 0.03
-                            recent_upward = 0.03
-
-                    # Đưa tay lên (recent_upward >= 0.012) hoặc bắt đầu di chuyển (recent_dist >= 0.016)
-                    hand_is_moving = (recent_upward >= 0.007) or (recent_dist >= 0.010)
-
-                    if not self.in_segment:
-                        # Ở STANDBY: Chỉ kích hoạt khi tay có sự thay đổi đưa lên / bắt đầu làm động tác
-                        if hand_is_moving:
-                            gesture_active = True
-                            self.still_since = None
-                        else:
-                            gesture_active = False
-                    else:
-                        # Đang trong cử chỉ: Tiếp tục ghi nếu tay còn di chuyển
-                        if recent_dist >= 0.009:
-                            gesture_active = True
-                            self.still_since = None
-                        else:
-                            if self.still_since is None:
-                                self.still_since = now
-                                gesture_active = True
-                            elif (now - self.still_since) >= 0.35:
-                                # Tay đã dừng yên 0.35s sau động tác -> Chốt cử chỉ
-                                gesture_active = False
-                            else:
-                                gesture_active = True
-                else:
-                    self.raw_hand_history.clear()
-                    self.still_since = None
-                    gesture_active = False
+                # 3. Gesture tracking state machine (chống kích hoạt giả khi tay đứng yên / buông thõng):
+                gesture_active, self.still_since = evaluate_gesture_activity(
+                    res, now, self.raw_hand_history, self.in_segment, self.still_since
+                )
 
                 if not self.recognition_enabled and self.rec_mode != "manual":
                     if self.in_segment or self.tracker.in_segment:

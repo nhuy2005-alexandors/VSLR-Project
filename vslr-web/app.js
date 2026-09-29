@@ -629,7 +629,12 @@ document.addEventListener('DOMContentLoaded', () => {
   async function startClientWebcam() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          frameRate: { ideal: 30, min: 20 },
+          facingMode: "user"
+        },
         audio: false
       });
       state.clientStream = stream;
@@ -810,14 +815,14 @@ document.addEventListener('DOMContentLoaded', () => {
       updateRecognizeUI();
     }
 
-    // Cập nhật trạng thái GHI CỬ CHỈ (màu đỏ nhấp nháy) vs SẴN SÀNG
+    // Cập nhật trạng thái GHI CỬ CHỈ (màu đỏ) vs SẴN SÀNG (màu xanh)
     if (state.isRecognizing) {
       if (res.in_segment) {
         recStatusTag?.classList.add('active');
         if (recStatusText) recStatusText.textContent = '🔴 ĐANG GHI CỬ CHỈ...';
       } else {
         recStatusTag?.classList.remove('active');
-        if (recStatusText) recStatusText.textContent = '🟢 ĐANG NHẬN DIỆN (Sẵn sàng dơ tay)';
+        if (recStatusText) recStatusText.textContent = '🟢 SẴN SÀNG NHẬN DIỆN (Hãy dơ tay lên)';
       }
     }
 
@@ -841,13 +846,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!frameCanvas) {
       frameCanvas = document.createElement('canvas');
     }
-    frameCanvas.width = 360;
-    frameCanvas.height = 270;
+    frameCanvas.width = 320;
+    frameCanvas.height = 240;
     const ctx = frameCanvas.getContext('2d');
     let inFlight = 0;
-    const MAX_IN_FLIGHT = 2;
+    const MAX_IN_FLIGHT = 3;
     let wsSafetyTimeout = null;
-    let lastVideoTime = -1;
 
     // 1. Mở kết nối WebSocket tốc độ cao Pipelined tới Backend (kèm session_id độc lập)
     try {
@@ -868,7 +872,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const res = JSON.parse(evt.data);
           handleClientTelemetry(res);
         } catch (err) {}
-        // Gọi ngay frame tiếp theo khi vừa nhận xong kết quả (0ms idle delay)
+        // Gọi ngay frame tiếp theo khi vừa nhận xong kết quả (Pipelined 0ms delay)
         requestAnimationFrame(pumpNextFrame);
       };
       clientWs.onerror = () => {
@@ -883,14 +887,11 @@ document.addEventListener('DOMContentLoaded', () => {
       clientWs = null;
     }
 
-    // 2. Vòng lặp truyền frame Pipelined (Tối đa 2 frame song song để triệt tiêu độ trễ mạng)
-    const jpegQuality = 0.55;
+    // 2. Vòng lặp truyền frame Pipelined (Định dạng nén siêu nhẹ 320x240, ~6KB)
+    const jpegQuality = 0.50;
 
     const pumpNextFrame = () => {
       if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended || !state.isRecognizing || inFlight >= MAX_IN_FLIGHT) return;
-      // Chống lặp frame: chỉ gửi khi camera đã render frame mới thực sự
-      if (liveVideo.currentTime === lastVideoTime && lastVideoTime > 0) return;
-      lastVideoTime = liveVideo.currentTime;
 
       inFlight++;
       try {
@@ -931,7 +932,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
-    state.clientFrameTimer = setInterval(pumpNextFrame, 28);
+    state.clientFrameTimer = setInterval(pumpNextFrame, 25);
   }
 
   // Phím bấm giao diện

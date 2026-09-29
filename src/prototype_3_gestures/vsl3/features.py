@@ -644,9 +644,9 @@ class HolisticExtractor:
 
     def process_frame(self, frame_bgr: np.ndarray) -> FrameObservation:
         h, w = frame_bgr.shape[:2]
-        if w > 360:
-            scale_h = int(round(h * 360.0 / w))
-            small = cv2.resize(frame_bgr, (360, scale_h), interpolation=cv2.INTER_LINEAR)
+        if w > 320:
+            scale_h = int(round(h * 320.0 / w))
+            small = cv2.resize(frame_bgr, (320, scale_h), interpolation=cv2.INTER_LINEAR)
             rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         else:
             rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
