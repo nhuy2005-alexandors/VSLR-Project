@@ -239,6 +239,7 @@ class GestureVideoRecorder:
     ):
         self.enabled = enabled
         self.fps = max(5.0, float(fps))
+        self.pre_roll_seconds = float(pre_roll_seconds)
         self.output_dir = resolve_record_dir(record_dir)
         self.pre_roll_len = max(5, int(self.fps * pre_roll_seconds))
         self.record_mode = record_mode if record_mode in ("both", "skeleton", "raw") else "both"
@@ -280,9 +281,10 @@ class GestureVideoRecorder:
 
         if in_segment:
             if not self.recording_active:
-                # Bắt đầu cử chỉ mới: nạp các frame pre-roll từ bộ đệm trượt
+                # Bắt đầu cử chỉ mới: chỉ nạp các frame pre-roll thực sự mới trong khoảng pre_roll_seconds gần nhất
                 self.recording_active = True
-                self.current_gesture_frames = list(self.pre_roll_buffer)
+                cutoff = now - max(0.25, self.pre_roll_seconds)
+                self.current_gesture_frames = [f for f in self.pre_roll_buffer if f.timestamp >= cutoff]
             self.current_gesture_frames.append(rec_item)
         else:
             if self.recording_active:

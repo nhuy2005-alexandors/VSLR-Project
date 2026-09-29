@@ -92,15 +92,18 @@
             <input type="text" id="signerNameInput" class="signer-name-input" placeholder="Nhập tên của bạn (VD: Huy, Ngọc, P05)..." maxlength="32" autocomplete="off">
             <span class="signer-saved-badge" id="signerSavedBadge">✓ Đã lưu</span>
           </div>
-          <div class="signer-storage-status">
-            <span class="storage-indicator-dot" id="backendConnDot"></span>
-            <span id="backendConnText">Thư mục lưu: <strong id="currentTargetFolderText">videos/xin_chao/</strong></span>
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <button class="pill-toggle-btn active px-3 py-1 small" id="btnToggleRecordConsent" title="Bật/Tắt lưu video phục vụ đánh giá NCKH">💾 Lưu video: BẬT</button>
+            <div class="signer-storage-status">
+              <span class="storage-indicator-dot" id="backendConnDot"></span>
+              <span id="backendConnText">Thư mục lưu: <strong id="currentTargetFolderText">videos/xin_chao/</strong></span>
+            </div>
           </div>
         </div>
 
         <!-- Practice Gesture Selector Bar (Chọn bài học 24 cử chỉ ngay tại chỗ) -->
-        <div class="signer-bar-card practice-selector-bar">
-          <div class="d-flex align-items-center gap-2 flex-grow-1 flex-wrap">
+        <div class="signer-bar-card practice-selector-bar" id="practiceSelectorBar">
+          <div class="d-flex align-items-center gap-2 flex-grow-1 flex-wrap" id="practiceSelectWrap">
             <span class="fs-5">🎯</span>
             <label for="practiceGestureSelect" class="signer-label">Cử chỉ đang học:</label>
             <select id="practiceGestureSelect" class="signer-name-input fw-bold" style="max-width: 340px; cursor: pointer;">
@@ -108,9 +111,11 @@
             </select>
           </div>
           <div class="d-flex align-items-center gap-2 flex-wrap">
-            <button class="pill-toggle-btn px-3 py-2" id="btnPrevGesture" title="Cử chỉ trước">◀ Trước</button>
-            <button class="pill-toggle-btn px-3 py-2" id="btnNextGesture" title="Cử chỉ tiếp theo">Tiếp ▶</button>
-            <button class="pill-toggle-btn active px-3 py-2" id="btnToggleTutorialPanel" title="Ẩn/Hiện Video Hướng Dẫn">🎬 Video Mẫu: HIỆN</button>
+            <div class="d-flex gap-1" id="practiceNavBtns">
+              <button class="pill-toggle-btn px-3 py-2" id="btnPrevGesture" title="Cử chỉ trước">◀ Trước</button>
+              <button class="pill-toggle-btn px-3 py-2" id="btnNextGesture" title="Cử chỉ tiếp theo">Tiếp ▶</button>
+            </div>
+            <button class="pill-toggle-btn active px-3 py-2" id="btnToggleTutorialPanel" title="Chuyển đổi Chế độ Luyện tập / Dịch Tự do">🎬 Video Mẫu: HIỆN</button>
           </div>
         </div>
 
@@ -219,6 +224,7 @@
             <div class="video-sub-controls">
               <button class="pill-toggle-btn btn-webcam-toggle" id="btnToggleCamera" title="Phím tắt: W">📷 Webcam: TẮT (W)</button>
               <button class="pill-toggle-btn btn-recognize-toggle" id="btnToggleRecognize" title="Bắt đầu / Tạm dừng nhận diện cử chỉ (Phím SPACE)">▶ BẮT ĐẦU NHẬN DIỆN (SPACE)</button>
+              <button class="pill-toggle-btn" id="btnReplayUserClip" style="display:none; background:#f0f9ff; color:#0369a1; border:1px solid #bae6fd; font-weight:700;" title="Xem lại đoạn video cử chỉ bạn vừa thực hiện">🎬 Xem lại vừa làm</button>
             </div>
 
             <!-- Compact Sentence & History Row directly below controls -->
@@ -232,6 +238,9 @@
               </div>
               <div class="sentence-words-box" id="sentenceWordsBox">
                 <span class="empty-hint">Chưa có từ nào... (Bật Webcam và nhấn [BẮT ĐẦU NHẬN DIỆN] để dịch cử chỉ)</span>
+              </div>
+              <div class="small text-muted mt-2" style="font-size: 12px;">
+                💡 <strong>Cách ghép nhiều từ thành câu:</strong> Sau khi làm xong 1 cử chỉ, hãy <strong>hạ tay hoặc dừng tay ~0.4 giây</strong> để hệ thống chốt từ vào câu, sau đó tiếp tục làm cử chỉ tiếp theo.
               </div>
             </div>
 
@@ -340,6 +349,48 @@
       <div class="modal-foot">
         <button class="btn-sm btn-voice-outline" id="btnDetailSpeak">🔊 Nghe phát âm (Trúc Ly)</button>
         <button class="btn-sm btn-primary-blue" id="btnDetailPractice">📷 Thực hành trên Camera</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONSENT MODAL: XIN PHÉP LƯU VIDEO ĐÁNH GIÁ NCKH -->
+  <div class="modal-layer" id="consentModal">
+    <div class="modal-card" style="max-width: 480px;">
+      <div class="modal-head">
+        <h3 class="modal-head-title">🛡️ Thông báo Lưu Video Đánh Giá</h3>
+      </div>
+      <div class="modal-body-content">
+        <p class="mb-3">
+          Để phục vụ việc phân tích sai số và đánh giá độ chính xác của đề tài <strong>Nghiên cứu Khoa học VSLR (ĐH Cần Thơ)</strong>, hệ thống có tính năng lưu lại các đoạn video ngắn khi bạn thực hiện cử chỉ.
+        </p>
+        <div class="p-3 bg-light rounded-3 small text-secondary mb-2">
+          ✓ Video chỉ dùng cho mục đích nghiên cứu học thuật nội bộ.<br>
+          ✓ Nếu đồng ý: Video sẽ được lưu để đánh giá kết quả.<br>
+          ✓ Nếu không đồng ý: Hệ thống chỉ nhận diện trực tiếp và <strong>không lưu video</strong>.
+        </div>
+      </div>
+      <div class="modal-foot d-flex justify-content-end gap-2">
+        <button class="btn-sm btn-voice-outline" id="btnConsentDecline">✕ Không lưu video</button>
+        <button class="btn-sm btn-primary-blue" id="btnConsentAccept">✓ Đồng ý lưu video</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- REPLAY MODAL: XEM LẠI VIDEO CỬ CHỈ VỪA THỰC HIỆN -->
+  <div class="modal-layer" id="userReplayModal">
+    <div class="modal-card" style="max-width: 600px;">
+      <div class="modal-head">
+        <h3 class="modal-head-title" id="userReplayTitle">🎬 Xem lại cử chỉ vừa thực hiện</h3>
+        <button class="modal-close" id="closeUserReplayModal">&times;</button>
+      </div>
+      <div class="modal-body-content">
+        <div class="tutorial-video-frame mb-2">
+          <video id="userReplayVideo" playsinline controls autoplay loop style="width:100%; height:100%; object-fit:cover; transform: scaleX(-1);"></video>
+        </div>
+        <p class="small text-muted mb-0 text-center" id="userReplaySubtext">Đoạn video cử chỉ bạn vừa thực hiện trước Camera.</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-sm btn-primary-blue" id="btnCloseReplayBottom">Đóng & Tiếp tục tập</button>
       </div>
     </div>
   </div>

@@ -218,18 +218,159 @@ document.addEventListener('DOMContentLoaded', () => {
     setPracticeGesture(state.targetGestureIndex + 1);
   });
 
+  const practiceSelectWrap = document.getElementById('practiceSelectWrap');
+  const practiceNavBtns = document.getElementById('practiceNavBtns');
+
   btnToggleTutorialPanel?.addEventListener('click', () => {
     state.showTutorialPanel = !state.showTutorialPanel;
     if (tutorialGuideCard) {
       tutorialGuideCard.style.display = state.showTutorialPanel ? 'flex' : 'none';
+    }
+    if (practiceSelectWrap) {
+      practiceSelectWrap.style.display = state.showTutorialPanel ? 'flex' : 'none';
+    }
+    if (practiceNavBtns) {
+      practiceNavBtns.style.display = state.showTutorialPanel ? 'flex' : 'none';
+    }
+    if (practiceMatchBadge) {
+      practiceMatchBadge.style.display = state.showTutorialPanel ? 'inline-block' : 'none';
     }
     if (practiceStudioBox) {
       practiceStudioBox.classList.toggle('single-column-studio', !state.showTutorialPanel);
     }
     if (btnToggleTutorialPanel) {
       btnToggleTutorialPanel.classList.toggle('active', state.showTutorialPanel);
-      btnToggleTutorialPanel.textContent = state.showTutorialPanel ? '🎬 Video Mẫu: HIỆN' : '🎬 Video Mẫu: ẨN';
+      btnToggleTutorialPanel.textContent = state.showTutorialPanel ? '🎬 Video Mẫu: HIỆN' : '🎓 Bật Học Cử Chỉ';
     }
+
+    // Khi ẩn luyện tập: chuyển sang thư mục videos/dich_tu_do/, không lưu vào xin_chao nữa
+    const targetFolder = state.showTutorialPanel ? state.targetGestureId : 'dich_tu_do';
+    if (currentTargetFolderText) {
+      currentTargetFolderText.textContent = state.recordConsent ? `videos/${targetFolder}/` : 'Đã tắt lưu video';
+    }
+    fetch(`${API_BASE}/api/action?action=set_target_gesture&target_gesture=${encodeURIComponent(targetFolder)}&session_id=${encodeURIComponent(state.sessionId)}`, {
+      method: 'POST'
+    }).catch(() => {});
+    if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({ target_gesture: targetFolder }));
+    }
+  });
+
+  // =========================================================================
+  // 2C. RECORD CONSENT & USER CLIP REPLAY (XEM LẠI VIDEO VỪA THỰC HIỆN)
+  // =========================================================================
+  const consentModal = document.getElementById('consentModal');
+  const btnConsentAccept = document.getElementById('btnConsentAccept');
+  const btnConsentDecline = document.getElementById('btnConsentDecline');
+  const btnToggleRecordConsent = document.getElementById('btnToggleRecordConsent');
+  const btnReplayUserClip = document.getElementById('btnReplayUserClip');
+  const userReplayModal = document.getElementById('userReplayModal');
+  const userReplayVideo = document.getElementById('userReplayVideo');
+  const closeUserReplayModal = document.getElementById('closeUserReplayModal');
+  const btnCloseReplayBottom = document.getElementById('btnCloseReplayBottom');
+
+  state.recordConsent = localStorage.getItem('vslr_record_consent') !== 'false';
+
+  function updateRecordConsentUI() {
+    if (btnToggleRecordConsent) {
+      btnToggleRecordConsent.classList.toggle('active', state.recordConsent);
+      btnToggleRecordConsent.textContent = state.recordConsent ? '💾 Lưu video: BẬT' : '💾 Lưu video: TẮT';
+    }
+    const targetFolder = state.showTutorialPanel ? state.targetGestureId : 'dich_tu_do';
+    if (currentTargetFolderText) {
+      currentTargetFolderText.textContent = state.recordConsent ? `videos/${targetFolder}/` : 'Không lưu (Riêng tư)';
+    }
+    fetch(`${API_BASE}/api/action?action=set_record_consent&consent=${state.recordConsent ? 'true' : 'false'}&session_id=${encodeURIComponent(state.sessionId)}`, {
+      method: 'POST'
+    }).catch(() => {});
+  }
+
+  // Hiển thị hộp thoại xin phép lưu video lần đầu tiên người dùng mở web
+  if (localStorage.getItem('vslr_record_consent') === null && consentModal) {
+    consentModal.classList.add('open');
+  }
+  setTimeout(updateRecordConsentUI, 100);
+
+  btnConsentAccept?.addEventListener('click', () => {
+    state.recordConsent = true;
+    localStorage.setItem('vslr_record_consent', 'true');
+    consentModal?.classList.remove('open');
+    updateRecordConsentUI();
+  });
+
+  btnConsentDecline?.addEventListener('click', () => {
+    state.recordConsent = false;
+    localStorage.setItem('vslr_record_consent', 'false');
+    consentModal?.classList.remove('open');
+    updateRecordConsentUI();
+  });
+
+  btnToggleRecordConsent?.addEventListener('click', () => {
+    state.recordConsent = !state.recordConsent;
+    localStorage.setItem('vslr_record_consent', state.recordConsent ? 'true' : 'false');
+    updateRecordConsentUI();
+  });
+
+  // Ghi nhận đoạn clip cử chỉ phía trình duyệt để người dùng bấm "Xem lại vừa làm" tức thì (0ms)
+  let userMediaRecorder = null;
+  let userRecordedChunks = [];
+  let lastUserClipUrl = null;
+
+  function startUserClipRecorder() {
+    if (!state.clientStream || !window.MediaRecorder) return;
+    try {
+      if (userMediaRecorder && userMediaRecorder.state !== 'inactive') {
+        userMediaRecorder.stop();
+      }
+      userRecordedChunks = [];
+      userMediaRecorder = new MediaRecorder(state.clientStream);
+      userMediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) userRecordedChunks.push(e.data);
+      };
+      userMediaRecorder.onstop = () => {
+        if (userRecordedChunks.length > 0) {
+          const blob = new Blob(userRecordedChunks, { type: userMediaRecorder.mimeType || 'video/webm' });
+          if (lastUserClipUrl) URL.revokeObjectURL(lastUserClipUrl);
+          lastUserClipUrl = URL.createObjectURL(blob);
+          if (btnReplayUserClip) btnReplayUserClip.style.display = 'inline-block';
+        }
+      };
+      userMediaRecorder.start(100);
+    } catch (e) {
+      userMediaRecorder = null;
+    }
+  }
+
+  function finishUserClipRecorder() {
+    if (userMediaRecorder && userMediaRecorder.state === 'recording') {
+      try { userMediaRecorder.stop(); } catch (e) {}
+    }
+    if (state.isRecognizing) {
+      setTimeout(startUserClipRecorder, 250);
+    }
+  }
+
+  btnReplayUserClip?.addEventListener('click', () => {
+    if (lastUserClipUrl && userReplayVideo) {
+      userReplayVideo.src = lastUserClipUrl;
+      userReplayModal?.classList.add('open');
+      userReplayVideo.currentTime = 0;
+      userReplayVideo.play().catch(() => {});
+    }
+  });
+
+  function closeUserReplay() {
+    userReplayModal?.classList.remove('open');
+    if (userReplayVideo) {
+      userReplayVideo.pause();
+      userReplayVideo.removeAttribute('src');
+    }
+  }
+
+  closeUserReplayModal?.addEventListener('click', closeUserReplay);
+  btnCloseReplayBottom?.addEventListener('click', closeUserReplay);
+  userReplayModal?.addEventListener('click', (e) => {
+    if (e.target === userReplayModal) closeUserReplay();
   });
 
   btnStudySpeakSample?.addEventListener('click', () => {
@@ -605,6 +746,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     state.isRecognizing = !state.isRecognizing;
     updateRecognizeUI();
+    if (state.isRecognizing) {
+      startUserClipRecorder();
+    } else {
+      finishUserClipRecorder();
+    }
     const act = state.isRecognizing ? 'start_recognize' : 'stop_recognize';
     triggerBackendAction(`${act}&session_id=${encodeURIComponent(state.sessionId)}`);
     if (clientWs && clientWs.readyState === WebSocket.OPEN) {
@@ -645,6 +791,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Tắt vẽ khung xương trên giao diện web theo yêu cầu (tiết kiệm CPU & gọn gàng)
     // if (res.skeleton !== undefined) { drawSkeletonOverlay(res.skeleton); }
+
+    // Cập nhật câu thoại đã dịch ngay khi có kết quả
+    if (res.sentence && Array.isArray(res.sentence) && res.sentence.length !== state.sentence.length) {
+      state.sentence = res.sentence;
+      renderSentence();
+    }
 
     // Cập nhật kết quả dự đoán và phát âm thanh ngay lập tức
     if (res.decision && res.decision.seq && res.decision.seq > lastSeenDecisionSeq) {
@@ -936,6 +1088,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
           // Phát âm trên loa thiết bị người dùng (đặc biệt khi truy cập từ xa)
           speakText(data.label);
+
+          // Hoàn tất lưu video clip của người dùng để có thể bấm "Xem lại vừa làm"
+          finishUserClipRecorder();
         } else {
           if (recStatusText) {
             recStatusText.textContent = `BỎ QUA: ${data.label} (${data.confidence}%) — ${data.reason}`;

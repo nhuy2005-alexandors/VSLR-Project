@@ -111,6 +111,7 @@ class ClientAISession:
             record_dir=pipeline.record_dir,
             fps=30.0,
             enabled=pipeline.recorder.enabled,
+            pre_roll_seconds=0.20,
             record_mode="both",
         )
         self.sentence: list[str] = []
@@ -224,7 +225,7 @@ class ClientAISession:
                     recent_dist = 0.03
                     recent_upward = 0.03
 
-            hand_is_moving = (recent_upward >= 0.012) or (recent_dist >= 0.016)
+            hand_is_moving = (recent_upward >= 0.007) or (recent_dist >= 0.010)
 
             if not self.in_segment:
                 if hand_is_moving:
@@ -407,8 +408,10 @@ class RealtimeVSLRPipeline:
             record_dir=self.record_dir,
             fps=30.0,
             enabled=not no_record,
+            pre_roll_seconds=0.20,
             record_mode="both",
         )
+        self.record_consent: bool = not no_record
 
         # 3. Camera & State
         self.requested_camera = camera_id
@@ -952,7 +955,7 @@ class RealtimeVSLRPipeline:
                             recent_upward = 0.03
 
                     # Đưa tay lên (recent_upward >= 0.012) hoặc bắt đầu di chuyển (recent_dist >= 0.016)
-                    hand_is_moving = (recent_upward >= 0.012) or (recent_dist >= 0.016)
+                    hand_is_moving = (recent_upward >= 0.007) or (recent_dist >= 0.010)
 
                     if not self.in_segment:
                         # Ở STANDBY: Chỉ kích hoạt khi tay có sự thay đổi đưa lên / bắt đầu làm động tác
@@ -1181,13 +1184,20 @@ def create_app(
         client_mode: bool = Query(False),
         session_id: str = Query("default"),
         target_gesture: str = Query(None),
+        consent: bool = Query(True),
     ):
         cmd = action.split("&")[0].lower().strip()
         if target_gesture:
             pipeline.target_gesture = target_gesture.strip()
             sess = pipeline.get_or_create_session(session_id)
             sess.target_gesture = target_gesture.strip()
-        if cmd == "set_target_gesture":
+        if cmd == "set_record_consent":
+            pipeline.record_consent = consent
+            pipeline.recorder.enabled = consent
+            sess = pipeline.get_or_create_session(session_id)
+            sess.recorder.enabled = consent
+            return {"status": "ok", "action": "set_record_consent", "record_consent": consent}
+        elif cmd == "set_target_gesture":
             return {"status": "ok", "action": "set_target_gesture", "target_gesture": pipeline.target_gesture}
         elif cmd == "start_camera":
             ok = pipeline.start_camera(client_mode=client_mode)
