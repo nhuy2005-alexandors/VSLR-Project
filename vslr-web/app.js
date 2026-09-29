@@ -86,8 +86,8 @@ document.addEventListener('DOMContentLoaded', () => {
     signerName: localStorage.getItem('vslr_signer_name') || '',
     isRecognizing: false, // Mặc định mở camera CHƯA nhận diện liền, chờ bấm nút bắt đầu
     targetGestureIndex: 0,
-    targetGestureId: 'xin_chao',
-    showTutorialPanel: true,
+    targetGestureId: 'dich_tu_do',
+    showTutorialPanel: false,
     sentence: [],
     recMode: 'auto',       // 'auto' | 'manual'
     showHands: true,
@@ -227,10 +227,10 @@ document.addEventListener('DOMContentLoaded', () => {
       tutorialGuideCard.style.display = state.showTutorialPanel ? 'flex' : 'none';
     }
     if (practiceSelectWrap) {
-      practiceSelectWrap.style.display = state.showTutorialPanel ? 'flex' : 'none';
+      practiceSelectWrap.style.setProperty('display', state.showTutorialPanel ? 'flex' : 'none', 'important');
     }
     if (practiceNavBtns) {
-      practiceNavBtns.style.display = state.showTutorialPanel ? 'flex' : 'none';
+      practiceNavBtns.style.setProperty('display', state.showTutorialPanel ? 'flex' : 'none', 'important');
     }
     if (practiceMatchBadge) {
       practiceMatchBadge.style.display = state.showTutorialPanel ? 'inline-block' : 'none';
@@ -240,7 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (btnToggleTutorialPanel) {
       btnToggleTutorialPanel.classList.toggle('active', state.showTutorialPanel);
-      btnToggleTutorialPanel.textContent = state.showTutorialPanel ? '🎬 Video Mẫu: HIỆN' : '🎓 Bật Học Cử Chỉ';
+      btnToggleTutorialPanel.textContent = state.showTutorialPanel ? '🎬 Đóng Video Mẫu' : '🎓 Mở Video Mẫu Song Song';
     }
 
     // Khi ẩn luyện tập: chuyển sang thư mục videos/dich_tu_do/, không lưu vào xin_chao nữa

@@ -102,29 +102,29 @@
           </div>
         </div>
 
-        <!-- Practice Gesture Selector Bar (Chọn bài học 24 cử chỉ ngay tại chỗ) -->
+        <!-- Practice Gesture Selector Bar (Mặc định thu gọn ở Chế độ Nhận diện 1 màn hình rộng) -->
         <div class="signer-bar-card practice-selector-bar" id="practiceSelectorBar">
-          <div class="d-flex align-items-center gap-2 flex-grow-1 flex-wrap" id="practiceSelectWrap">
+          <div class="d-flex align-items-center gap-2 flex-grow-1 flex-wrap" id="practiceSelectWrap" style="display: none !important;">
             <span class="fs-5">🎯</span>
             <label for="practiceGestureSelect" class="signer-label">Cử chỉ đang học:</label>
             <select id="practiceGestureSelect" class="signer-name-input fw-bold" style="max-width: 340px; cursor: pointer;">
               <!-- Populated by JavaScript -->
             </select>
           </div>
-          <div class="d-flex align-items-center gap-2 flex-wrap">
-            <div class="d-flex gap-1" id="practiceNavBtns">
+          <div class="d-flex align-items-center gap-2 flex-wrap ms-auto">
+            <div class="d-flex gap-1" id="practiceNavBtns" style="display: none !important;">
               <button class="pill-toggle-btn px-3 py-2" id="btnPrevGesture" title="Cử chỉ trước">◀ Trước</button>
               <button class="pill-toggle-btn px-3 py-2" id="btnNextGesture" title="Cử chỉ tiếp theo">Tiếp ▶</button>
             </div>
-            <button class="pill-toggle-btn active px-3 py-2" id="btnToggleTutorialPanel" title="Chuyển đổi Chế độ Luyện tập / Dịch Tự do">🎬 Video Mẫu: HIỆN</button>
+            <button class="pill-toggle-btn px-3 py-2" id="btnToggleTutorialPanel" title="Mở video hướng dẫn song song nếu cần tập theo mẫu">🎓 Mở Video Mẫu Song Song</button>
           </div>
         </div>
 
-        <!-- Split Studio: Tutorial Video + Live Webcam Side-by-Side -->
-        <div class="translation-dual-box practice-split-studio" id="practiceStudioBox">
+        <!-- Single Full-Width Camera Studio by default -->
+        <div class="translation-dual-box practice-split-studio single-column-studio" id="practiceStudioBox">
 
-          <!-- Left / Top Panel: Tutorial Video Guide -->
-          <div class="trans-card tutorial-guide-card" id="tutorialGuideCard">
+          <!-- Left / Top Panel: Tutorial Video Guide (Hidden by default) -->
+          <div class="trans-card tutorial-guide-card" id="tutorialGuideCard" style="display: none;">
             <div class="card-column-header mb-2">
               <div class="d-flex align-items-center gap-2">
                 <span class="fs-3" id="studyGestureIcon">👋</span>
@@ -161,8 +161,8 @@
 
           <div class="trans-card video-card">
             <div class="card-column-header">
-              <h2 class="card-column-title">Camera Thực Hành</h2>
-              <span class="badge bg-info-subtle text-info-emphasis rounded-pill px-3 py-2" id="practiceMatchBadge">Đang tập: Xin chào</span>
+              <h2 class="card-column-title">Camera Nhận Diện Cử Chỉ</h2>
+              <span class="badge bg-info-subtle text-info-emphasis rounded-pill px-3 py-2" id="practiceMatchBadge" style="display: none;">Đang tập: Xin chào</span>
             </div>
 
             <div class="video-display-area" id="cameraViewport">

@@ -124,24 +124,21 @@ proc = subprocess.Popen(['./cloudflared', 'tunnel', '--url', 'http://127.0.0.1:8
                         encoding='utf-8', errors='replace')
 
 url_re = re.compile(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com')
-for line in proc.stdout:
-    m = url_re.search(line)
-    if m:
-        url = m.group(0)
-        vercel_link = f'https://vslr-project-v3.vercel.app/?backend={url}'
-        print('\n' + '='*74)
-        print('🎉 HỆ THỐNG VSLR ĐÃ CHẠY THÀNH CÔNG TRÊN AWS SINGAPORE! (PING 30ms)')
-        print('='*74)
-        print('👉 1. LINK TRỰC TIẾP CLOUDFLARE (Gửi bạn bè):')
-        print(f'      {url}')
-        print('\n👉 2. LINK QUA TÊN MIỀN VERCEL:')
-        print(f'      {vercel_link}')
-        print('='*74)
-        print('\n(Giữ nguyên cửa sổ terminal này để duy trì server. Nhấn Ctrl+C để dừng)\n')
-        break
-
+found_url = False
 try:
-    proc.wait()
+    for line in proc.stdout:
+        if not found_url:
+            m = url_re.search(line)
+            if m:
+                found_url = True
+                url = m.group(0)
+                print('\n' + '='*74)
+                print('🎉 HỆ THỐNG VSLR ĐÃ CHẠY THÀNH CÔNG TRÊN AWS SINGAPORE! (PING 30ms)')
+                print('='*74)
+                print('👉 LINK TRUY CẬP CHÍNH THỨC DUY NHẤT (Mở trên Web / Gửi bạn bè):')
+                print(f'      {url}')
+                print('='*74)
+                print('\n(Giữ nguyên cửa sổ terminal này để duy trì server. Nhấn Ctrl+C để dừng)\n')
 except KeyboardInterrupt:
     print('\nĐang dừng server AWS...')
     proc.terminate()
