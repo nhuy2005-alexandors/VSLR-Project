@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# VSLR: Automated 1-Command Deployment on AWS EC2 Singapore (Ubuntu 22.04 LTS)
+# VSLR: Automated 1-Command Deployment on AWS EC2 Singapore (Ubuntu LTS)
 # =============================================================================
 set -e
 
 echo "===================================================================="
-echo "   KHỞI TẠO HỆ THỐNG VSLR BACKEND TẠI AWS SINGAPORE (4 vCPU)"
+echo "   KHỞI TẠO HỆ THỐNG VSLR BACKEND TẠI AWS SINGAPORE"
 echo "   - Region: Asia Pacific (Singapore) ap-southeast-1"
 echo "   - Tốc độ: Ping 25-35ms cực mượt, băng thông 10 Gbps"
 echo "   - Tự động đồng bộ: Hugging Face Dataset (ntbii305/vslr-remote)"
@@ -13,12 +13,13 @@ echo "===================================================================="
 echo ""
 
 # 1. Cập nhật và cài đặt các gói hệ thống Linux cần thiết
-echo "[1/4] Đang cài đặt thư viện hệ thống (Python 3, OpenCV, MediaPipe, Audio, Fonts)..."
+echo "[1/4] Đang cài đặt thư viện hệ thống (Python 3, Git LFS, OpenCV, MediaPipe, Fonts)..."
 sudo apt-get update -y
 sudo apt-get install -y \
     python3-pip \
     python3-venv \
     git \
+    git-lfs \
     curl \
     ffmpeg \
     libgl1 \
@@ -26,22 +27,23 @@ sudo apt-get install -y \
     libsndfile1 \
     fonts-dejavu-core \
     fonts-liberation
+git lfs install >/dev/null 2>&1 || true
 
-# 2. Tải mã nguồn mới nhất từ GitHub
+# 2. Tải mã nguồn và mô hình AI từ Hugging Face Space
 echo ""
-echo "[2/4] Đang đồng bộ mã nguồn VSLR từ GitHub (ntbii/vslr-project-v3)..."
+echo "[2/4] Đang tải mã nguồn VSLR và mô hình BiLSTM (ntbii305/vslr-backend)..."
 cd ~
-if [ ! -d "vslr-project-v3" ]; then
-    git clone https://github.com/ntbii/vslr-project-v3.git
+if [ ! -d "vslr-backend" ]; then
+    git clone https://huggingface.co/spaces/ntbii305/vslr-backend
 fi
-cd vslr-project-v3
+cd vslr-backend
 git fetch origin
-git checkout main
-git pull origin main || true
+git reset --hard origin/main
+git lfs pull || true
 
 # 3. Tạo môi trường ảo và cài đặt thư viện Python
 echo ""
-echo "[3/4] Đang nạp môi trường ảo Python và thư viện Machine Learning..."
+echo "[3/4] Đang tạo môi trường ảo Python và cài đặt PyTorch, MediaPipe, FastAPI..."
 if [ ! -d "venv" ]; then
     python3 -m venv venv
 fi
