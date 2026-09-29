@@ -42,11 +42,16 @@ document.addEventListener('DOMContentLoaded', () => {
   ].map((item, idx) => {
     const signers = ['P01', 'P02', 'P03', 'P04'];
     const signer = signers[idx % 4];
+    const cdnBase = (
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname.endsWith('.vercel.app')
+    ) ? '' : 'https://vslr-project-v3.vercel.app/';
     return {
       ...item,
       signer,
-      video: `tutorials/${item.id}.mp4?v=3.2`,
-      thumb: `tutorials/${item.id}.jpg?v=3.2`
+      video: `${cdnBase}tutorials/${item.id}.mp4?v=3.2`,
+      thumb: `${cdnBase}tutorials/${item.id}.jpg?v=3.2`
     };
   });
 

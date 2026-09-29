@@ -79,6 +79,7 @@ def main() -> None:
         "vslr-web/*.css",
         "vslr-web/*.png",
         "vslr-web/vercel.json",
+        "vslr-web/tutorials/**",
         "scripts/setup_aws_singapore.sh",
     ]
     ignore_patterns = [
