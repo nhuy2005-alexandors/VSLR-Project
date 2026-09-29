@@ -1,0 +1,16 @@
+src/
+models/
+artifacts/
+dataset/
+videos/
+scripts/
+tests/
+venv/
+app.py
+requirements.txt
+pyproject.toml
+packages.txt
+*.bat
+*.sh
+*.pt
+*.env

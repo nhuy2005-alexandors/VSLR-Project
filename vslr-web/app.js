@@ -67,7 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
   );
   const isDirectTunnel = window.location.hostname.endsWith('.trycloudflare.com');
   const isLocalPC = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  const DEFAULT_REMOTE_BACKEND = 'https://ntbii305-vslr-backend.hf.space';
+  const DEFAULT_REMOTE_BACKEND = 'https://hdtv-news-rid-spa.trycloudflare.com';
   const API_BASE = isLocalHost ? '' : (localStorage.getItem('vslr_backend_url') || DEFAULT_REMOTE_BACKEND);
 
   // Sinh mã phiên ngẫu nhiên độc lập cho từng tab / thiết bị (Multi-tenant)
