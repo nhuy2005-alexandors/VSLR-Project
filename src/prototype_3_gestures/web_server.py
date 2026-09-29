@@ -1433,7 +1433,7 @@ def create_app(
                 return res
         return JSONResponse({"status": "error", "detail": "Invalid frame"}, status_code=400)
 
-    # 9. WebSocket Client Stream (Tốc độ cao cho Client Webcam)
+    # 9. WebSocket Client Stream (Tốc độ cao Pipelined cho Client Webcam)
     @app.websocket("/api/ws/client_feed")
     async def websocket_client_feed(
         websocket: WebSocket,
@@ -1447,15 +1447,45 @@ def create_app(
         session.is_recognizing = recognizing
         if target_gesture:
             session.target_gesture = target_gesture
+
+        # Queue đệm tối đa 2 frame mới nhất (Zero-lag: tự động hủy frame cũ nếu mạng dồn toa)
+        frame_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
+
+        async def worker():
+            try:
+                while True:
+                    data = await frame_queue.get()
+                    if data is None:
+                        break
+                    try:
+                        nparr = np.frombuffer(data, np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            res = await asyncio.to_thread(session.process_frame, frame, session.is_recognizing)
+                            await websocket.send_json(res)
+                    except Exception:
+                        break
+                    finally:
+                        frame_queue.task_done()
+            except Exception:
+                pass
+
+        worker_task = asyncio.create_task(worker())
+
         try:
             while True:
                 message = await websocket.receive()
                 if "bytes" in message and message["bytes"]:
-                    nparr = np.frombuffer(message["bytes"], np.uint8)
-                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                    if frame is not None:
-                        res = session.process_frame(frame, is_recognizing=session.is_recognizing)
-                        await websocket.send_json(res)
+                    if frame_queue.full():
+                        try:
+                            _ = frame_queue.get_nowait()
+                            frame_queue.task_done()
+                        except Exception:
+                            pass
+                    try:
+                        frame_queue.put_nowait(message["bytes"])
+                    except Exception:
+                        pass
                 elif "text" in message and message["text"]:
                     try:
                         ctl = json.loads(message["text"])
@@ -1472,6 +1502,12 @@ def create_app(
             pass
         except Exception:
             pass
+        finally:
+            try:
+                frame_queue.put_nowait(None)
+            except Exception:
+                pass
+            worker_task.cancel()
 
     # Mount static files (Frontend HTML, CSS, JS)
     web_path = Path(web_dir).resolve()

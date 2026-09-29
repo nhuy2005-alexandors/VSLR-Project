@@ -838,18 +838,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function startFrameStreamingLoop() {
     if (state.clientFrameTimer) clearInterval(state.clientFrameTimer);
-    const isFastNetwork = isDirectTunnel || API_BASE.includes('.trycloudflare.com') || isLocalPC;
     if (!frameCanvas) {
       frameCanvas = document.createElement('canvas');
     }
-    frameCanvas.width = isFastNetwork ? 480 : 320;
-    frameCanvas.height = isFastNetwork ? 360 : 240;
+    frameCanvas.width = 360;
+    frameCanvas.height = 270;
     const ctx = frameCanvas.getContext('2d');
-    let isSending = false;
+    let inFlight = 0;
+    const MAX_IN_FLIGHT = 2;
     let wsSafetyTimeout = null;
     let lastVideoTime = -1;
 
-    // 1. Mở kết nối WebSocket tốc độ cao tới Backend (kèm session_id độc lập)
+    // 1. Mở kết nối WebSocket tốc độ cao Pipelined tới Backend (kèm session_id độc lập)
     try {
       if (clientWs) {
         try { clientWs.close(); } catch (e) {}
@@ -862,46 +862,50 @@ document.addEventListener('DOMContentLoaded', () => {
       clientWs = new WebSocket(wsUrl);
       clientWs.binaryType = 'arraybuffer';
       clientWs.onmessage = (evt) => {
-        isSending = false;
+        if (inFlight > 0) inFlight--;
         clearTimeout(wsSafetyTimeout);
         try {
           const res = JSON.parse(evt.data);
           handleClientTelemetry(res);
         } catch (err) {}
+        // Gọi ngay frame tiếp theo khi vừa nhận xong kết quả (0ms idle delay)
+        requestAnimationFrame(pumpNextFrame);
       };
       clientWs.onerror = () => {
-        isSending = false;
+        inFlight = 0;
         clearTimeout(wsSafetyTimeout);
       };
       clientWs.onclose = () => {
-        isSending = false;
+        inFlight = 0;
         clearTimeout(wsSafetyTimeout);
       };
     } catch (e) {
       clientWs = null;
     }
 
-    // 2. Vòng lặp truyền frame Lock-Step (chống ứ đọng buffer: chỉ chụp và gửi khi server đã nhận xong frame trước)
-    const streamInterval = isFastNetwork ? 35 : 55;
-    const jpegQuality = isFastNetwork ? 0.65 : 0.50;
+    // 2. Vòng lặp truyền frame Pipelined (Tối đa 2 frame song song để triệt tiêu độ trễ mạng)
+    const jpegQuality = 0.55;
 
     const pumpNextFrame = () => {
-      if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended || !state.isRecognizing || isSending) return;
+      if (!state.cameraEnabled || !liveVideo || liveVideo.paused || liveVideo.ended || !state.isRecognizing || inFlight >= MAX_IN_FLIGHT) return;
       // Chống lặp frame: chỉ gửi khi camera đã render frame mới thực sự
       if (liveVideo.currentTime === lastVideoTime && lastVideoTime > 0) return;
       lastVideoTime = liveVideo.currentTime;
 
-      isSending = true;
+      inFlight++;
       try {
         ctx.drawImage(liveVideo, 0, 0, frameCanvas.width, frameCanvas.height);
         frameCanvas.toBlob((blob) => {
-          if (!blob) { isSending = false; return; }
+          if (!blob) {
+            if (inFlight > 0) inFlight--;
+            return;
+          }
 
-          // Ưu tiên 1: Gửi qua WebSocket (0ms latency, không buffer)
+          // Ưu tiên 1: Gửi qua WebSocket (0ms latency, Pipelined)
           if (clientWs && clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(blob);
             clearTimeout(wsSafetyTimeout);
-            wsSafetyTimeout = setTimeout(() => { isSending = false; }, 200);
+            wsSafetyTimeout = setTimeout(() => { inFlight = 0; }, 1200);
             return;
           }
 
@@ -917,14 +921,17 @@ document.addEventListener('DOMContentLoaded', () => {
           .then(r => r.json())
           .then(res => { handleClientTelemetry(res); })
           .catch(() => { setBackendStatusUI(false); })
-          .finally(() => { clearTimeout(tid); isSending = false; });
+          .finally(() => {
+            clearTimeout(tid);
+            if (inFlight > 0) inFlight--;
+          });
         }, 'image/jpeg', jpegQuality);
       } catch (e) {
-        isSending = false;
+        if (inFlight > 0) inFlight--;
       }
     };
 
-    state.clientFrameTimer = setInterval(pumpNextFrame, streamInterval);
+    state.clientFrameTimer = setInterval(pumpNextFrame, 28);
   }
 
   // Phím bấm giao diện

@@ -518,10 +518,10 @@ def augment_sequence(sequence: np.ndarray, rng: np.random.Generator) -> np.ndarr
 
 
 class HolisticExtractor:
-    def __init__(self, min_detection_confidence: float = 0.35, min_tracking_confidence: float = 0.28):
+    def __init__(self, min_detection_confidence: float = 0.35, min_tracking_confidence: float = 0.28, model_complexity: int = 0):
         self._config = dict(
             static_image_mode=False,
-            model_complexity=1,
+            model_complexity=model_complexity,
             smooth_landmarks=True,
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
@@ -644,9 +644,9 @@ class HolisticExtractor:
 
     def process_frame(self, frame_bgr: np.ndarray) -> FrameObservation:
         h, w = frame_bgr.shape[:2]
-        if w > 480:
-            scale_h = int(round(h * 480.0 / w))
-            small = cv2.resize(frame_bgr, (480, scale_h), interpolation=cv2.INTER_LINEAR)
+        if w > 360:
+            scale_h = int(round(h * 360.0 / w))
+            small = cv2.resize(frame_bgr, (360, scale_h), interpolation=cv2.INTER_LINEAR)
             rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         else:
             rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
