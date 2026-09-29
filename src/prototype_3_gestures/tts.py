@@ -166,17 +166,63 @@ class TTSManager:
             self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
             self._worker_thread.start()
 
+    @staticmethod
+    def _fix_hf_onnx_symlinks() -> None:
+        """Chuyển symlink trong cache Hugging Face thành hardlink trên Linux để tránh lỗi
+        ONNX Runtime: External data path validation failed (escapes model directory).
+        """
+        try:
+            from pathlib import Path
+            import shutil
+
+            try:
+                import huggingface_hub.file_download as hf_fd
+                def _hardlink_or_copy(src: str, dst: str, new_blob: bool = False) -> None:
+                    if os.path.exists(dst) or os.path.islink(dst):
+                        os.remove(dst)
+                    try:
+                        os.link(src, dst)
+                    except Exception:
+                        shutil.copy2(src, dst)
+                hf_fd._create_symlink = _hardlink_or_copy
+            except Exception:
+                pass
+
+            hf_home = Path(os.environ.get("HF_HOME") or (Path.home() / ".cache" / "huggingface" / "hub"))
+            if not hf_home.is_dir():
+                return
+            for link_path in hf_home.rglob("*"):
+                try:
+                    if link_path.is_symlink():
+                        target = link_path.resolve()
+                        if target.is_file():
+                            link_path.unlink()
+                            try:
+                                os.link(target, link_path)
+                            except Exception:
+                                shutil.copy2(target, link_path)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
     def _create_vieneu_instance(self):
+        self._fix_hf_onnx_symlinks()
         from vieneu import Vieneu
 
         is_cloud = bool(os.environ.get("SPACE_ID") or os.environ.get("SPACES_ZERO_GPU"))
         if is_cloud:
             # Trên Cloud / Hugging Face ZeroGPU: ép chạy ONNX CPU để tránh lỗi "No CUDA GPUs are available"
-            return Vieneu(device="cpu", backend="onnx")
+            try:
+                return Vieneu(device="cpu", backend="onnx")
+            except Exception:
+                self._fix_hf_onnx_symlinks()
+                return Vieneu(device="cpu", backend="onnx")
         try:
             return Vieneu()
         except Exception:
-            # Fallback an toàn sang ONNX CPU nếu CUDA không khả dụng
+            # Fallback an toàn sang ONNX CPU nếu CUDA không khả dụng hoặc dính symlink
+            self._fix_hf_onnx_symlinks()
             return Vieneu(device="cpu", backend="onnx")
 
     def _preload_vieneu(self) -> None:
