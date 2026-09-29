@@ -759,9 +759,41 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let lastSeenDecisionSeq = 0;
+  const btnChangeBackend = document.getElementById('btnChangeBackend');
+
+  function setBackendStatusUI(connected) {
+    state.backendConnected = connected;
+    if (!btnChangeBackend) return;
+    if (connected) {
+      btnChangeBackend.style.background = '#ecfdf5';
+      btnChangeBackend.style.color = '#059669';
+      btnChangeBackend.style.borderColor = '#a7f3d0';
+      btnChangeBackend.textContent = '🟢 AI Server: Đã kết nối';
+    } else {
+      btnChangeBackend.style.background = '#fef2f2';
+      btnChangeBackend.style.color = '#dc2626';
+      btnChangeBackend.style.borderColor = '#fecaca';
+      btnChangeBackend.textContent = '🔴 Mất kết nối AI (Bấm đổi link)';
+    }
+  }
+
+  btnChangeBackend?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const current = localStorage.getItem('vslr_backend_url') || API_BASE || '';
+    const newUrl = prompt(
+      'Nhập đường link Cloudflare mới từ cửa sổ Terminal AWS của bạn:\n(Ví dụ: https://xxxx-yyyy-zzzz.trycloudflare.com)',
+      current
+    );
+    if (newUrl !== null && newUrl.trim()) {
+      const cleaned = newUrl.trim().replace(/\/+$/, '');
+      localStorage.setItem('vslr_backend_url', cleaned);
+      window.location.search = `?backend=${encodeURIComponent(cleaned)}`;
+    }
+  });
 
   function handleClientTelemetry(res) {
     if (!res) return;
+    setBackendStatusUI(true);
     if (hudFpsVal && res.fps) {
       hudFpsVal.textContent = res.fps.toFixed(1);
     }
@@ -837,6 +869,14 @@ document.addEventListener('DOMContentLoaded', () => {
           handleClientTelemetry(res);
         } catch (err) {}
       };
+      clientWs.onerror = () => {
+        isSending = false;
+        clearTimeout(wsSafetyTimeout);
+      };
+      clientWs.onclose = () => {
+        isSending = false;
+        clearTimeout(wsSafetyTimeout);
+      };
     } catch (e) {
       clientWs = null;
     }
@@ -865,16 +905,19 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
           }
 
-          // Ưu tiên 2: HTTP Fallback
+          // Ưu tiên 2: HTTP Fallback (có timeout 2s chống treo cứng)
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 2000);
           fetch(`${API_BASE}/api/client_frame?signer=${encodeURIComponent(state.signerName || 'Khách')}&recognizing=${state.isRecognizing ? 1 : 0}&session_id=${encodeURIComponent(state.sessionId)}`, {
             method: 'POST',
             body: blob,
-            headers: { 'Content-Type': 'image/jpeg' }
+            headers: { 'Content-Type': 'image/jpeg' },
+            signal: controller.signal
           })
           .then(r => r.json())
           .then(res => { handleClientTelemetry(res); })
-          .catch(() => {})
-          .finally(() => { isSending = false; });
+          .catch(() => { setBackendStatusUI(false); })
+          .finally(() => { clearTimeout(tid); isSending = false; });
         }, 'image/jpeg', jpegQuality);
       } catch (e) {
         isSending = false;
@@ -964,7 +1007,7 @@ document.addEventListener('DOMContentLoaded', () => {
     state.eventSource = new EventSource(`${API_BASE}/api/events`);
 
     state.eventSource.onopen = () => {
-      state.backendConnected = true;
+      setBackendStatusUI(true);
       camPrompt?.classList.add('hidden');
     };
 
@@ -978,7 +1021,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     state.eventSource.onerror = () => {
-      state.backendConnected = false;
+      setBackendStatusUI(false);
       // Thử kết nối lại sau 2.5s
       setTimeout(() => {
         if (!state.backendConnected) initEventStream();
