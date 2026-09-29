@@ -80,20 +80,44 @@ echo ""
 echo "[4/4] Đang khởi động AI Server và tạo đường hầm Cloudflare HTTPS..."
 python3 -c "
 import subprocess, re, time, os, threading, sys, types
-try:
-    import sounddevice
-except Exception:
-    sys.modules['sounddevice'] = types.ModuleType('sounddevice')
+
+# Trên máy chủ AWS EC2 không có card âm thanh vật lý / PulseAudio daemon,
+# giả lập module sounddevice để MediaPipe và VieNeu-TTS hoạt động mượt mà
+mock_sd = types.ModuleType('sounddevice')
+mock_sd.default = types.SimpleNamespace(samplerate=48000, channels=1, device=None)
+mock_sd.play = lambda *args, **kwargs: None
+mock_sd.stop = lambda *args, **kwargs: None
+mock_sd.wait = lambda *args, **kwargs: None
+mock_sd.query_devices = lambda *args, **kwargs: []
+mock_sd.InputStream = object
+mock_sd.OutputStream = object
+mock_sd.PortAudioError = type('PortAudioError', (Exception,), {})
+sys.modules['sounddevice'] = mock_sd
+
+ready_evt = threading.Event()
+startup_err = []
 
 def run_uvicorn():
-    import uvicorn
-    from prototype_3_gestures.web_server import RealtimeVSLRPipeline, create_app
-    pipeline = RealtimeVSLRPipeline('models/gesture_lstm.pt', confidence_threshold=0.62)
-    app = create_app(pipeline, web_dir='vslr-web')
-    uvicorn.run(app, host='0.0.0.0', port=8000, log_level='warning')
+    try:
+        import uvicorn
+        from prototype_3_gestures.web_server import RealtimeVSLRPipeline, create_app
+        pipeline = RealtimeVSLRPipeline('models/gesture_lstm.pt', confidence_threshold=0.62)
+        app = create_app(pipeline, web_dir='vslr-web')
+        ready_evt.set()
+        uvicorn.run(app, host='0.0.0.0', port=8000, log_level='warning')
+    except Exception as exc:
+        startup_err.append(exc)
+        ready_evt.set()
+        raise
 
 threading.Thread(target=run_uvicorn, daemon=True).start()
-time.sleep(3.5)
+print('⏳ Đang nạp mô hình AI BiLSTM (24 cử chỉ) và khởi tạo FastAPI Server...')
+ready_evt.wait(timeout=45.0)
+if startup_err:
+    print(f'❌ Lỗi khởi động AI Server: {startup_err[0]}', file=sys.stderr)
+    sys.exit(1)
+print('✅ AI Server đã sẵn sàng tại cổng 8000! Đang kết nối Cloudflare Tunnel...')
+time.sleep(1.5)
 
 proc = subprocess.Popen(['./cloudflared', 'tunnel', '--url', 'http://127.0.0.1:8000'],
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

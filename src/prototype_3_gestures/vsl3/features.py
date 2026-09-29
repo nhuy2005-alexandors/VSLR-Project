@@ -9,9 +9,18 @@ import sys
 import types
 import cv2
 try:
-    import sounddevice
+    import sounddevice  # noqa: F401
 except Exception:
-    sys.modules["sounddevice"] = types.ModuleType("sounddevice")
+    mock_sd = types.ModuleType("sounddevice")
+    mock_sd.default = types.SimpleNamespace(samplerate=48000, channels=1, device=None)
+    mock_sd.play = lambda *args, **kwargs: None
+    mock_sd.stop = lambda *args, **kwargs: None
+    mock_sd.wait = lambda *args, **kwargs: None
+    mock_sd.query_devices = lambda *args, **kwargs: []
+    mock_sd.InputStream = object
+    mock_sd.OutputStream = object
+    mock_sd.PortAudioError = type("PortAudioError", (Exception,), {})
+    sys.modules["sounddevice"] = mock_sd
 import mediapipe as mp
 import numpy as np
 
