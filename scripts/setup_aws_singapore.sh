@@ -13,11 +13,10 @@ echo "===================================================================="
 echo ""
 
 # 1. Cập nhật và cài đặt các gói hệ thống Linux cần thiết
-echo "[1/4] Đang cài đặt thư viện hệ thống (Python 3, Git LFS, OpenCV, MediaPipe, Fonts)..."
+echo "[1/4] Đang cài đặt thư viện hệ thống (Build tools, Git LFS, OpenCV, Audio, Fonts)..."
 sudo apt-get update -y
 sudo apt-get install -y \
-    python3-pip \
-    python3-venv \
+    build-essential \
     git \
     git-lfs \
     curl \
@@ -25,6 +24,7 @@ sudo apt-get install -y \
     libgl1 \
     libglib2.0-0 \
     libsndfile1 \
+    libportaudio2 \
     fonts-dejavu-core \
     fonts-liberation
 git lfs install >/dev/null 2>&1 || true
@@ -41,15 +41,18 @@ git fetch origin
 git reset --hard origin/main
 git lfs pull || true
 
-# 3. Tạo môi trường ảo và cài đặt thư viện Python
+# 3. Cài đặt Python 3.11 chuẩn (tương thích 100% với MediaPipe & PyTorch) thông qua trình quản lý siêu tốc uv
 echo ""
-echo "[3/4] Đang tạo môi trường ảo Python và cài đặt PyTorch, MediaPipe, FastAPI..."
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
+echo "[3/4] Đang thiết lập Python 3.11 và cài đặt PyTorch, MediaPipe, FastAPI..."
+if ! command -v uv >/dev/null 2>&1 && [ ! -f "$HOME/.local/bin/uv" ]; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
+export PATH="$HOME/.local/bin:$PATH"
+
+rm -rf venv
+uv venv --python 3.11 venv
 source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 
 # Cài đặt font Arial tiếng Việt vào hệ thống Linux
 if [ -f "src/prototype_3_gestures/arial.ttf" ]; then
