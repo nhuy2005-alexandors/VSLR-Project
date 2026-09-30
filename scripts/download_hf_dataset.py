@@ -1,22 +1,55 @@
-"""Script tải video và dữ liệu test từ Hugging Face Dataset (ntbii305/vslr-remote) về máy tính."""
+"""Script tự động tải video test từ Máy chủ AWS Singapore & Hugging Face Dataset về thư mục videos/ trên máy tính."""
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
+import urllib.parse
+import urllib.request
+import zipfile
 from pathlib import Path
 
-from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub import snapshot_download
+
+
+def get_active_aws_url() -> str:
+    """Lấy địa chỉ Cloudflare Tunnel đang hoạt động của máy chủ AWS từ Auto-Discovery."""
+    try:
+        req = urllib.request.Request("https://ntfy.sh/vslr_ctu_aws_active_backend_prod_v3/json?poll=1&since=24h")
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            lines = resp.read().decode("utf-8").strip().splitlines()
+            latest_time = -1
+            latest_url = ""
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    if (
+                        data.get("event") == "message"
+                        and str(data.get("message", "")).startswith("https://")
+                        and ".trycloudflare.com" in str(data.get("message", ""))
+                        and int(data.get("time", 0)) >= latest_time
+                    ):
+                        latest_time = int(data.get("time", 0))
+                        latest_url = str(data.get("message", "")).strip().rstrip("/")
+                except Exception:
+                    pass
+            return latest_url
+    except Exception:
+        return ""
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Tải dữ liệu video từ Hugging Face Dataset")
+    parser = argparse.ArgumentParser(description="Tải dữ liệu video từ AWS / Hugging Face Dataset")
     parser.add_argument("--token", default="", help="Hugging Face Token")
     parser.add_argument("--dataset-repo", default="ntbii305/vslr-remote", help="Dataset Repo ID")
-    parser.add_argument("--signer", default="", help="Chỉ tải thư mục của 1 người cụ thể (VD: khach, huy)")
-    parser.add_argument("--output-dir", default="videos_from_huggingface", help="Thư mục lưu trên máy")
+    parser.add_argument("--signer", default="", help="Chỉ tải thư mục của 1 người cụ thể (VD: khuong, huy)")
+    parser.add_argument("--output-dir", default="videos", help="Thư mục lưu trên máy (Mặc định: videos)")
+    parser.add_argument("--backend-url", default="", help="Link Cloudflare AWS trực tiếp (nếu muốn chỉ định)")
     args = parser.parse_args()
 
     root_dir = Path(__file__).resolve().parent.parent
@@ -28,26 +61,40 @@ def main() -> None:
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
 
-    token = (args.token or os.environ.get("HF_TOKEN") or "").strip()
-    if not token:
-        print("=" * 68)
-        print("   TẢI VIDEO TEST TỪ HUGGING FACE DATASET VỀ MÁY TÍNH")
-        print("=" * 68)
-        token = input("👉 Nhập mã Hugging Face Token (hf_...): ").strip()
-
     out_dir = root_dir / args.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    allow_patterns = f"data/{args.signer}/*" if args.signer else "data/**"
-    print(f"\n[1/2] Đang tải dữ liệu từ '{args.dataset_repo}' ({allow_patterns})...")
+    # 1. Tải trực tiếp từ Máy chủ AWS Singapore (Qua Auto-Discovery)
+    aws_url = (args.backend_url or get_active_aws_url()).strip().rstrip("/")
+    if aws_url:
+        q_signer = urllib.parse.quote(args.signer.strip()) if args.signer else ""
+        zip_endpoint = f"{aws_url}/api/recordings/zip?signer={q_signer}"
+        print(f"\n[1/2] Đang kết nối máy chủ AWS ({aws_url}) để tải video '{args.signer or 'tất cả'}'...")
+        try:
+            req = urllib.request.Request(zip_endpoint)
+            with urllib.request.urlopen(req, timeout=60.0) as resp:
+                zip_bytes = resp.read()
+                with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                    zf.extractall(out_dir)
+                print(f"      ✓ Đã tải và giải nén thành công từ máy chủ AWS vào: {out_dir}")
+        except Exception as exc:
+            print(f"      [Thông báo AWS] {exc}")
 
-    local_path = snapshot_download(
-        repo_id=args.dataset_repo,
-        repo_type="dataset",
-        allow_patterns=allow_patterns,
-        local_dir=str(out_dir),
-        token=token if token else None,
-    )
+    # 2. Đồng bộ thêm từ Hugging Face Dataset (nếu có)
+    token = (args.token or os.environ.get("HF_TOKEN") or "").strip()
+    if token:
+        allow_patterns = f"data/*{args.signer}*/*" if args.signer else "data/**"
+        print(f"\n[2/2] Đang kiểm tra kho Hugging Face Dataset '{args.dataset_repo}'...")
+        try:
+            snapshot_download(
+                repo_id=args.dataset_repo,
+                repo_type="dataset",
+                allow_patterns=allow_patterns,
+                local_dir=str(out_dir),
+                token=token,
+            )
+        except Exception:
+            pass
 
     # Thống kê và tóm tắt các file JSON vừa tải về
     json_files = sorted(out_dir.rglob("*.json"))

@@ -1459,6 +1459,61 @@ def create_app(
         })
         return {"status": "ok", "signer": pipeline.current_signer}
 
+    # 7B. API Tải toàn bộ video test về máy tính (dạng file .zip 1-Click)
+    @app.get("/api/recordings/list")
+    async def list_recordings():
+        rec_root = Path(pipeline.record_dir).resolve()
+        if not rec_root.is_dir():
+            return {"total_signers": 0, "signers": []}
+        signers = []
+        for d in sorted(rec_root.iterdir()):
+            if d.is_dir():
+                mp4s = list(d.rglob("*.mp4"))
+                jsons = list(d.rglob("*.json"))
+                signers.append({
+                    "name": d.name,
+                    "mp4_count": len(mp4s),
+                    "json_count": len(jsons),
+                })
+        return {"total_signers": len(signers), "signers": signers}
+
+    @app.get("/api/recordings/zip")
+    async def download_recordings_zip(signer: str = Query("")):
+        import zipfile
+        rec_root = Path(pipeline.record_dir).resolve()
+        if not rec_root.is_dir():
+            raise HTTPException(status_code=404, detail="Thư mục videos chưa có dữ liệu")
+
+        target_dir = rec_root
+        clean_slug = ""
+        if signer and signer.strip():
+            from .recorder import slugify
+            clean_slug = slugify(signer.strip())
+            cand = rec_root / clean_slug
+            if cand.is_dir():
+                target_dir = cand
+            else:
+                matched = [d for d in rec_root.iterdir() if d.is_dir() and clean_slug in d.name.lower()]
+                if matched:
+                    target_dir = matched[0]
+                    clean_slug = target_dir.name
+                else:
+                    raise HTTPException(status_code=404, detail=f"Không tìm thấy thư mục của '{signer}'")
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fp in target_dir.rglob("*"):
+                if fp.is_file():
+                    rel_path = fp.relative_to(rec_root)
+                    zf.write(fp, arcname=str(rel_path))
+        buf.seek(0)
+        fname = f"videos_{clean_slug or 'all'}.zip"
+        return Response(
+            content=buf.read(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+
     # 8. Client Frame Injection API (Webcam từ trình duyệt từ xa gửi về AI)
     @app.post("/api/client_frame")
     async def post_client_frame(

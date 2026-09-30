@@ -1,11 +1,10 @@
 @echo off
 chcp 65001 >nul
-title VSLR - Tai Video Test tu Hugging Face Dataset ve may
+title VSLR - Tai Video Test tu AWS & Hugging Face ve may
 
 echo ====================================================================
-echo    TAI TOAN BO VIDEO TEST TU HUGGING FACE DATASET VE PHAN TICH
-echo    - Dataset: ntbii305/vslr-remote
-echo    - Thu muc luu: videos_from_huggingface/
+echo    TAI TOAN BO VIDEO TEST TU SERVER AWS & HUGGING FACE VE MAY
+echo    - Thu muc luu: D:\1. Nguyễn Trường Thọ\NCKH\github Nghị gửi\VSLR-Project\videos
 echo ====================================================================
 echo.
 
@@ -20,15 +19,13 @@ if exist "%CD%\venv\Scripts\python.exe" (
     set "PY_BIN=python"
 )
 
-"%PY_BIN%" scripts\download_hf_dataset.py --signer "khach"
+"%PY_BIN%" scripts\download_hf_dataset.py --output-dir "videos"
 
 echo.
 echo ====================================================================
-echo Da tai xong! Dang mo thu muc chua video...
+echo Da tai xong! Dang mo thu muc videos...
 echo ====================================================================
-if exist "videos_from_huggingface\data\khach" (
-    start "" "videos_from_huggingface\data\khach"
-) else (
-    start "" "videos_from_huggingface"
+if exist "videos" (
+    start "" "videos"
 )
 pause
