@@ -81,6 +81,7 @@ def main() -> None:
         "vslr-web/vercel.json",
         "vslr-web/tutorials/**",
         "scripts/setup_aws_singapore.sh",
+        "scripts/run_aws_daemon.py",
     ]
     ignore_patterns = [
         "**/__pycache__/**",

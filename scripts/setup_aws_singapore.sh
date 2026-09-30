@@ -75,93 +75,64 @@ export HF_TOKEN="${HF_TOKEN:-}"
 export HF_DATASET_REPO="${HF_DATASET_REPO:-ntbii305/vslr-remote}"
 export PYTHONPATH="$PWD/src:$PYTHONPATH"
 
-# 5. Khởi động AI Server và mở đường hầm Cloudflare Tunnel
+# 5. Thiết lập dịch vụ chạy nền liên tục 24/7 (Systemd Service)
 echo ""
-echo "[4/4] Đang khởi động AI Server và tạo đường hầm Cloudflare HTTPS..."
-python3 -c "
-import subprocess, re, time, os, threading, sys, types
+echo "[4/4] Đang kích hoạt dịch vụ chạy ngầm 24/7 (Tự khởi động & Tự phục hồi kết nối)..."
 
-# Trên máy chủ AWS EC2 không có card âm thanh vật lý / PulseAudio daemon,
-# giả lập module sounddevice để MediaPipe và VieNeu-TTS hoạt động mượt mà
-mock_sd = types.ModuleType('sounddevice')
-mock_sd.default = types.SimpleNamespace(samplerate=48000, channels=1, device=None)
-mock_sd.play = lambda *args, **kwargs: None
-mock_sd.stop = lambda *args, **kwargs: None
-mock_sd.wait = lambda *args, **kwargs: None
-mock_sd.query_devices = lambda *args, **kwargs: []
-mock_sd.InputStream = object
-mock_sd.OutputStream = object
-mock_sd.PortAudioError = type('PortAudioError', (Exception,), {})
-sys.modules['sounddevice'] = mock_sd
+pkill -f "cloudflared tunnel" >/dev/null 2>&1 || true
+pkill -f "run_aws_daemon.py" >/dev/null 2>&1 || true
+rm -f active_tunnel_url.txt
 
-ready_evt = threading.Event()
-startup_err = []
+sudo tee /etc/systemd/system/vslr.service >/dev/null <<EOF
+[Unit]
+Description=VSLR AI Server & Cloudflare Tunnel 24/7 Daemon
+After=network-online.target
+Wants=network-online.target
 
-def run_uvicorn():
-    try:
-        import uvicorn
-        from prototype_3_gestures.web_server import RealtimeVSLRPipeline, create_app
-        pipeline = RealtimeVSLRPipeline('models/gesture_lstm.pt', confidence_threshold=0.52)
-        app = create_app(pipeline, web_dir='vslr-web')
-        ready_evt.set()
-        uvicorn.run(app, host='0.0.0.0', port=8000, log_level='warning')
-    except Exception as exc:
-        startup_err.append(exc)
-        ready_evt.set()
-        raise
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$PWD
+Environment="PATH=$PWD/venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=$PWD/src"
+Environment="HF_TOKEN=${HF_TOKEN:-}"
+Environment="HF_DATASET_REPO=${HF_DATASET_REPO:-ntbii305/vslr-remote}"
+ExecStart=$PWD/venv/bin/python $PWD/scripts/run_aws_daemon.py
+Restart=always
+RestartSec=5
 
-threading.Thread(target=run_uvicorn, daemon=True).start()
-print('⏳ Đang nạp mô hình AI BiLSTM (24 cử chỉ) và khởi tạo FastAPI Server...')
-ready_evt.wait(timeout=45.0)
-if startup_err:
-    print(f'❌ Lỗi khởi động AI Server: {startup_err[0]}', file=sys.stderr)
-    sys.exit(1)
-print('✅ AI Server đã sẵn sàng tại cổng 8000! Đang kết nối Cloudflare Tunnel...')
-time.sleep(1.5)
+[Install]
+WantedBy=multi-user.target
+EOF
 
-proc = subprocess.Popen(['./cloudflared', 'tunnel', '--url', 'http://127.0.0.1:8000'],
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                        encoding='utf-8', errors='replace')
+sudo systemctl daemon-reload
+sudo systemctl enable vslr.service >/dev/null 2>&1 || true
+sudo systemctl restart vslr.service
 
-url_re = re.compile(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com')
-found_url = False
-try:
-    for line in proc.stdout:
-        if not found_url:
-            m = url_re.search(line)
-            if m:
-                found_url = True
-                url = m.group(0)
+echo "⏳ Đang nạp mô hình AI BiLSTM (24 cử chỉ) và mở đường hầm Cloudflare..."
+for i in {1..30}; do
+    if [ -s "active_tunnel_url.txt" ]; then
+        break
+    fi
+    sleep 1
+done
 
-                def sync_to_vercel_registry(tunnel_url):
-                    import urllib.request
-                    reg_url = 'https://ntfy.sh/vslr_ctu_aws_active_backend_prod_v3'
-                    try:
-                        req = urllib.request.Request(reg_url, data=tunnel_url.encode('utf-8'), method='POST')
-                        urllib.request.urlopen(req, timeout=5.0)
-                    except Exception:
-                        pass
-                    while True:
-                        time.sleep(900)
-                        try:
-                            req = urllib.request.Request(reg_url, data=tunnel_url.encode('utf-8'), method='POST')
-                            urllib.request.urlopen(req, timeout=5.0)
-                        except Exception:
-                            pass
+TUNNEL_URL=$(cat active_tunnel_url.txt 2>/dev/null || echo "Đang khởi tạo...")
 
-                threading.Thread(target=sync_to_vercel_registry, args=(url,), daemon=True).start()
-
-                print('\n' + '='*74)
-                print('🎉 HỆ THỐNG VSLR ĐÃ CHẠY THÀNH CÔNG TRÊN AWS SINGAPORE! (PING 30ms)')
-                print('='*74)
-                print('👉 1. TÊN MIỀN CỐ ĐỊNH CHÍNH THỨC (Mở trên Web / In vào Báo cáo / QR Code):')
-                print('      https://vslr-project-v3.vercel.app')
-                print('      (Đã tự động đồng bộ ngầm với đường hầm AWS của bạn - Không cần đổi link!)')
-                print('\n👉 2. ĐỊA CHỈ ĐƯỜNG HẦM CLOUDFLARE TRỰC TIẾP:')
-                print(f'      {url}')
-                print('='*74)
-                print('\n(Giữ nguyên cửa sổ terminal này để duy trì server. Nhấn Ctrl+C để dừng)\n')
-except KeyboardInterrupt:
-    print('\nĐang dừng server AWS...')
-    proc.terminate()
-"
+echo ""
+echo "=========================================================================="
+echo "🎉 HỆ THỐNG VSLR ĐÃ KÍCH HOẠT CHẾ ĐỘ CHẠY LIÊN TỤC 24/7 TRÊN AWS!"
+echo "=========================================================================="
+echo "👉 1. TÊN MIỀN CỐ ĐỊNH CHÍNH THỨC (Mở trên Web / In vào Báo cáo / QR Code):"
+echo "      https://vslr-project-v3.vercel.app"
+echo "      (Tự động đồng bộ ngầm với đường hầm AWS - Không bao giờ phải đổi link!)"
+echo ""
+echo "👉 2. ĐỊA CHỈ ĐƯỜNG HẦM CLOUDFLARE HIỆN TẠI:"
+echo "      ${TUNNEL_URL}"
+echo "=========================================================================="
+echo "✅ TRẠNG THÁI CHẠY NGẦM 24/7 ĐÃ BẬT:"
+echo "   • Bạn có thể ĐÓNG CỬA SỔ TERMINAL NÀY và TẮT MÁY TÍNH ngay bây giờ!"
+echo "   • Server sẽ tiếp tục chạy liên tục suốt ngày đêm và tự động phục hồi nếu rớt mạng."
+echo "   • Xem log trực tiếp bất kỳ lúc nào: sudo journalctl -u vslr -f"
+echo "   • Lệnh tạm dừng server:              sudo systemctl stop vslr"
+echo "=========================================================================="
