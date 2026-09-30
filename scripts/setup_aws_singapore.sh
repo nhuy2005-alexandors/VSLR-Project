@@ -101,7 +101,7 @@ def run_uvicorn():
     try:
         import uvicorn
         from prototype_3_gestures.web_server import RealtimeVSLRPipeline, create_app
-        pipeline = RealtimeVSLRPipeline('models/gesture_lstm.pt', confidence_threshold=0.62)
+        pipeline = RealtimeVSLRPipeline('models/gesture_lstm.pt', confidence_threshold=0.52)
         app = create_app(pipeline, web_dir='vslr-web')
         ready_evt.set()
         uvicorn.run(app, host='0.0.0.0', port=8000, log_level='warning')

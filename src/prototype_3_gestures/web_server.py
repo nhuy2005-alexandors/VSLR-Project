@@ -119,9 +119,16 @@ def evaluate_gesture_activity(
     history: deque,
     in_segment: bool,
     still_since: float | None,
+    last_seg_end: float = 0.0,
 ) -> tuple[bool, float | None]:
-    """Kiểm tra hoạt động ký hiệu chính xác, loại bỏ 100% hiện tượng nhảy đỏ khi đứng yên hoặc buông thõng tay."""
+    """Kiểm tra hoạt động ký hiệu chính xác, loại bỏ 100% hiện tượng hạ tay bị đoán nhầm thành 'Bạn quê ở đâu'."""
     if res is None:
+        history.clear()
+        return False, None
+
+    # Sau khi kết thúc 1 cử chỉ: Thời gian ân hạn 0.55s để hạ tay về vị trí nghỉ,
+    # tuyệt đối không kích hoạt cử chỉ mới từ chuyển động hạ tay (nguyên nhân chính gây nhầm 'Bạn quê ở đâu')
+    if (not in_segment) and (now - last_seg_end < 0.55):
         history.clear()
         return False, None
 
@@ -169,21 +176,24 @@ def evaluate_gesture_activity(
             hip_y = float(np.mean(valid_hips))
 
     highest_wrist_y = min(wrist_ys)
-    # Bàn tay phải được dơ lên trên hông/thắt lưng (y nhỏ hơn là cao hơn) VÀ không sát mép dưới màn hình
-    hand_is_raised = (highest_wrist_y < (hip_y - 0.035)) and (highest_wrist_y < 0.80)
+    # Bàn tay phải được dơ lên trên hông/thắt lưng VÀ không sát mép dưới màn hình
+    hand_is_raised = (highest_wrist_y < (hip_y - 0.035)) and (highest_wrist_y < 0.78)
 
     if not hand_is_raised:
-        # Tay đang buông thõng hai bên đùi hoặc để dưới bàn -> DẬP TẮT NGAY, không bao giờ ghi nhận
+        # Tay đang buông thõng hai bên đùi hoặc để dưới bàn -> DẬP TẮT NGAY
         history.clear()
         return False, None
 
-    # 3. Tính toán chuyển động thực sự của từng bàn tay độc lập (chống so sánh chéo T và P)
-    history.append((now, left_pts, right_pts))
+    # 3. Tính toán chuyển động thực sự của từng bàn tay độc lập
+    history.append((now, left_pts, right_pts, highest_wrist_y))
     motion = 0.0
+    vert_drop = 0.0  # > 0 nghĩa là tay đang di chuyển đi xuống phía dưới
 
     if len(history) >= 2:
-        _, prev_l, prev_r = history[0]
-        _, cur_l, cur_r = history[-1]
+        _, prev_l, prev_r, prev_wy = history[0]
+        _, cur_l, cur_r, cur_wy = history[-1]
+
+        vert_drop = cur_wy - prev_wy  # Nếu > 0: tay đang hạ xuống
 
         if len(prev_l) == len(cur_l) and len(cur_l) > 0:
             diff_l = np.asarray(cur_l) - np.asarray(prev_l)
@@ -195,19 +205,27 @@ def evaluate_gesture_activity(
 
     # 4. Máy trạng thái:
     if not in_segment:
-        # Ở trạng thái chờ: Cần dơ tay lên và có chuyển động thực sự (>= 0.014) để bắt đầu
-        if motion >= 0.014:
+        # Khi ở trạng thái chờ:
+        # - Chuyển động đi xuống (vert_drop > 0.008) là động tác hạ tay nghỉ -> KHÔNG bắt đầu cử chỉ mới
+        if vert_drop > 0.008:
+            return False, None
+
+        # - Cần dơ tay lên vùng ngực/mặt (y < 0.72) và có chuyển động thực sự (>= 0.015) để bắt đầu
+        if (highest_wrist_y < 0.72) and (motion >= 0.015):
             return True, None
         return False, None
     else:
-        # Đang trong cử chỉ: Tiếp tục ghi nếu tay còn cử động hoặc vẫn dơ trong không gian ký hiệu
-        if motion >= 0.011:
+        # Đang trong cử chỉ:
+        # Các cử chỉ ghép như "Bạn tên gì", "Hôm nay bạn khỏe không", "Bạn đang làm gì"
+        # có khoảng nghỉ chuyển pha ngón tay ~0.3s.
+        # Chừng nào tay còn dơ trong vùng ký hiệu, duy trì trạng thái ghi nhận đến 0.65s!
+        if motion >= 0.010:
             return True, None
         else:
             if still_since is None:
                 return True, now
-            elif (now - still_since) >= 0.40:
-                # Tay đã dừng yên 0.40s -> Chốt cử chỉ
+            elif (now - still_since) >= 0.65:
+                # Tay đã dừng yên 0.65s sau động tác -> Chốt cử chỉ
                 return False, None
             else:
                 return True, still_since
@@ -245,6 +263,7 @@ class ClientAISession:
         self.fps_calc_time: float = time.monotonic()
         self.last_frame_hash: int | None = None
         self.last_active_time: float = time.monotonic()
+        self.last_segment_end_time: float = 0.0
         # Extractor riêng cho từng người dùng (chống lẫn lộn landmark và cho phép xử lý song song đa nhân)
         self.extractor = HolisticExtractor() if len(pipeline.client_sessions) < 8 else None
         self.extractor_lock = threading.Lock()
@@ -341,7 +360,8 @@ class ClientAISession:
 
         # Khi ĐÃ BẤM "BẮT ĐẦU NHẬN DIỆN":
         gesture_active, self.still_since = evaluate_gesture_activity(
-            res, now, self.raw_hand_history, self.in_segment, self.still_since
+            res, now, self.raw_hand_history, self.in_segment, self.still_since,
+            last_seg_end=self.last_segment_end_time
         )
 
         if not is_duplicate:
@@ -399,6 +419,19 @@ class ClientAISession:
             allow_uncalibrated=self.pipeline.allow_uncalibrated,
         )
 
+        now_seg = time.monotonic()
+        self.last_segment_end_time = now_seg
+
+        # Kiểm tra cử chỉ 2 tay (Bimanual gesture) cho 'Bạn quê ở đâu'
+        # "Bạn quê ở đâu" bắt buộc cả 2 tay phải cùng tham gia (ít nhất 15% số frame)
+        if decision.label == "Bạn quê ở đâu":
+            left_r = sum(segment.left_hand_present) / max(1, len(segment.left_hand_present))
+            right_r = sum(segment.right_hand_present) / max(1, len(segment.right_hand_present))
+            if left_r < 0.15 or right_r < 0.15:
+                print(f"[FILTER SQUASHED] Bỏ qua nhầm lẫn 'Bạn quê ở đâu' do hạ tay (L: {left_r:.2f}, R: {right_r:.2f})")
+                self.recorder.cancel_gesture()
+                return
+
         if self.recorder.enabled:
             self.recorder.save_gesture(
                 decision,
@@ -409,7 +442,6 @@ class ClientAISession:
             )
 
         self.decision_seq += 1
-        now_seg = time.monotonic()
         conf_pct = round(decision.confidence * 100)
 
         if decision.accepted:
@@ -458,7 +490,7 @@ class RealtimeVSLRPipeline:
         self,
         model_path: str | Path,
         camera_id: str | int = 0,
-        confidence_threshold: float = 0.70,
+        confidence_threshold: float = 0.52,
         cooldown: float = 1.0,
         word_gap: float = 0.35,
         sentence_gap: float = 1.8,

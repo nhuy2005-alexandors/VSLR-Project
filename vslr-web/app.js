@@ -904,7 +904,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
       inFlight++;
       try {
-        ctx.drawImage(liveVideo, 0, 0, frameCanvas.width, frameCanvas.height);
+        const vw = liveVideo.videoWidth || 640;
+        const vh = liveVideo.videoHeight || 480;
+
+        // Cắt khung hình chuẩn tỉ lệ (Center Crop) trên Điện thoại cầm dọc (Portrait 9:16 / 3:4)
+        // để cơ thể luôn giữ tỉ lệ 4:3 chuẩn như webcam máy tính, triệt tiêu méo hình gây đoán nhầm
+        let sx = 0, sy = 0, sw = vw, sh = vh;
+        const targetAspect = 4.0 / 3.0;
+        const srcAspect = vw / vh;
+        if (srcAspect < targetAspect) {
+          // Điện thoại chụp dọc: Cắt lấy vùng 4:3 ở phần thân trên (ngực và đầu) nơi người dùng làm cử chỉ
+          sh = vw / targetAspect;
+          sy = (vh - sh) * 0.18;
+        } else if (srcAspect > targetAspect) {
+          // Khung hình quá rộng: Cắt đều 2 bên
+          sw = vh * targetAspect;
+          sx = (vw - sw) / 2.0;
+        }
+
+        ctx.drawImage(liveVideo, sx, sy, sw, sh, 0, 0, frameCanvas.width, frameCanvas.height);
         frameCanvas.toBlob((blob) => {
           if (!blob) {
             if (inFlight > 0) inFlight--;
