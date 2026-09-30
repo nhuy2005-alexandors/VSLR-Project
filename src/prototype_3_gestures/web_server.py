@@ -245,6 +245,21 @@ class ClientAISession:
         self.fps_calc_time: float = time.monotonic()
         self.last_frame_hash: int | None = None
         self.last_active_time: float = time.monotonic()
+        # Extractor riêng cho từng người dùng (chống lẫn lộn landmark và cho phép xử lý song song đa nhân)
+        self.extractor = HolisticExtractor() if len(pipeline.client_sessions) < 8 else None
+        self.extractor_lock = threading.Lock()
+
+    def close(self) -> None:
+        try:
+            self.recorder.close()
+        except Exception:
+            pass
+        if self.extractor is not None:
+            try:
+                self.extractor.close()
+            except Exception:
+                pass
+            self.extractor = None
 
     def process_frame(self, frame: np.ndarray, is_recognizing: bool, signer_name: str | None = None, target_gesture: str | None = None) -> dict[str, Any]:
         now = time.monotonic()
@@ -269,9 +284,13 @@ class ClientAISession:
         is_duplicate = (f_hash == self.last_frame_hash)
         self.last_frame_hash = f_hash
 
-        # Trích xuất MediaPipe Holistic
-        with self.pipeline.session_extractor_lock:
-            obs = self.pipeline.session_extractor.process_frame(frame)
+        # Trích xuất MediaPipe Holistic (Ưu tiên extractor riêng của session để tracking độc lập 100%)
+        if self.extractor is not None:
+            with self.extractor_lock:
+                obs = self.extractor.process_frame(frame)
+        else:
+            with self.pipeline.session_extractor_lock:
+                obs = self.pipeline.session_extractor.process_frame(frame)
         res = getattr(obs, "results", None)
 
         # Trích xuất khung xương 2D cho màn hình của client
@@ -556,11 +575,11 @@ class RealtimeVSLRPipeline:
         clean_signer = (signer_name or "").strip() or self.current_signer
         now = time.monotonic()
 
-        # Dọn dẹp các session cũ không hoạt động quá 5 phút
-        expired = [k for k, s in self.client_sessions.items() if (now - s.last_active_time) > 300.0]
+        # Dọn dẹp các session cũ không hoạt động quá 3 phút (giải phóng RAM ngay)
+        expired = [k for k, s in self.client_sessions.items() if (now - s.last_active_time) > 180.0]
         for k in expired:
             try:
-                self.client_sessions[k].recorder.close()
+                self.client_sessions[k].close()
                 del self.client_sessions[k]
             except Exception:
                 pass
@@ -611,7 +630,7 @@ class RealtimeVSLRPipeline:
                 self.cap = None
         for s in list(self.client_sessions.values()):
             try:
-                s.recorder.close()
+                s.close()
             except Exception:
                 pass
         try:
