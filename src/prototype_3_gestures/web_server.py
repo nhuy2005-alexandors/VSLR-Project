@@ -121,15 +121,13 @@ def evaluate_gesture_activity(
     still_since: float | None,
     last_seg_end: float = 0.0,
 ) -> tuple[bool, float | None]:
-    """Kiểm tra hoạt động ký hiệu chính xác, loại bỏ 100% hiện tượng hạ tay bị đoán nhầm thành 'Bạn quê ở đâu'."""
+    """Kiểm tra hoạt động ký hiệu: Kích hoạt NGAY LẬP TỨC khi tay đưa qua thắt lưng hướng lên."""
     if res is None:
         history.clear()
         return False, None
 
-    # Sau khi kết thúc 1 cử chỉ: Thời gian ân hạn 0.55s để hạ tay về vị trí nghỉ,
-    # tuyệt đối không kích hoạt cử chỉ mới từ chuyển động hạ tay (nguyên nhân chính gây nhầm 'Bạn quê ở đâu')
-    if (not in_segment) and (now - last_seg_end < 0.55):
-        history.clear()
+    # Thời gian ân hạn 0.45s sau khi kết thúc cử chỉ trước để hạ tay về vị trí nghỉ
+    if (not in_segment) and (now - last_seg_end < 0.45):
         return False, None
 
     pose_lms = getattr(res, "pose_landmarks", None)
@@ -164,8 +162,11 @@ def evaluate_gesture_activity(
         history.clear()
         return False, None
 
-    # 2. Ngưỡng độ cao: Xác định vị trí thắt lưng / hông (nhỏ hơn là cao hơn trên ảnh)
-    hip_y = 0.82
+    highest_wrist_y = min(wrist_ys)
+
+    # 2. Ngưỡng độ cao: Xác định vị trí thắt lưng (Waistline)
+    # Thắt lưng nằm ngay tại hoặc trên khớp hông 1 chút (y nhỏ hơn là cao hơn trên ảnh)
+    hip_y = 0.88
     if pose_lms and pose_lms.landmark and len(pose_lms.landmark) > 24:
         valid_hips = [
             pose_lms.landmark[i].y
@@ -175,25 +176,19 @@ def evaluate_gesture_activity(
         if valid_hips:
             hip_y = float(np.mean(valid_hips))
 
-    highest_wrist_y = min(wrist_ys)
-    # Bàn tay phải được dơ lên trên hông/thắt lưng VÀ không sát mép dưới màn hình
-    hand_is_raised = (highest_wrist_y < (hip_y - 0.035)) and (highest_wrist_y < 0.78)
+    waist_y = min(0.92, hip_y - 0.015)
 
-    if not hand_is_raised:
-        # Tay đang buông thõng hai bên đùi hoặc để dưới bàn -> DẬP TẮT NGAY
-        history.clear()
-        return False, None
-
-    # 3. Tính toán chuyển động thực sự của từng bàn tay độc lập
+    # Lưu lịch sử liên tục để bắt kịp khoảnh khắc tay vừa qua thắt lưng
     history.append((now, left_pts, right_pts, highest_wrist_y))
     motion = 0.0
-    vert_drop = 0.0  # > 0 nghĩa là tay đang di chuyển đi xuống phía dưới
+    upward_lift = 0.0  # > 0 nghĩa là tay đang di chuyển HƯỚNG LÊN TRÊN (từ thắt lưng lên ngực)
 
     if len(history) >= 2:
         _, prev_l, prev_r, prev_wy = history[0]
         _, cur_l, cur_r, cur_wy = history[-1]
 
-        vert_drop = cur_wy - prev_wy  # Nếu > 0: tay đang hạ xuống
+        # Trong ảnh: y càng nhỏ = càng ở trên cao. Do đó prev_wy - cur_wy > 0 tức là đang đi LÊN
+        upward_lift = prev_wy - cur_wy
 
         if len(prev_l) == len(cur_l) and len(cur_l) > 0:
             diff_l = np.asarray(cur_l) - np.asarray(prev_l)
@@ -203,29 +198,35 @@ def evaluate_gesture_activity(
             diff_r = np.asarray(cur_r) - np.asarray(prev_r)
             motion = max(motion, float(np.max(np.linalg.norm(diff_r, axis=1))))
 
+    # 3. Kiểm tra vị trí thắt lưng:
+    hand_above_waist = (highest_wrist_y < waist_y) and (highest_wrist_y < 0.90)
+
     # 4. Máy trạng thái:
     if not in_segment:
-        # Khi ở trạng thái chờ:
-        # - Chuyển động đi xuống (vert_drop > 0.008) là động tác hạ tay nghỉ -> KHÔNG bắt đầu cử chỉ mới
-        if vert_drop > 0.008:
+        # TRẠNG THÁI CHỜ:
+        # Nếu tay còn ở dưới thắt lưng -> Chưa kích hoạt
+        if not hand_above_waist:
             return False, None
 
-        # - Cần dơ tay lên vùng ngực/mặt (y < 0.72) và có chuyển động thực sự (>= 0.015) để bắt đầu
-        if (highest_wrist_y < 0.72) and (motion >= 0.015):
+        # CHỈ CẦN TAY ĐƯA QUA THẮT LƯNG CÓ HƯỚNG DI CHUYỂN ĐƯA LÊN (hoặc có cử động rõ):
+        # -> KÍCH HOẠT NHẬN DIỆN NGAY TỨC THÌ!
+        if (upward_lift >= 0.005) or (motion >= 0.012):
             return True, None
         return False, None
     else:
-        # Đang trong cử chỉ:
-        # Các cử chỉ ghép như "Bạn tên gì", "Hôm nay bạn khỏe không", "Bạn đang làm gì"
-        # có khoảng nghỉ chuyển pha ngón tay ~0.3s.
-        # Chừng nào tay còn dơ trong vùng ký hiệu, duy trì trạng thái ghi nhận đến 0.65s!
-        if motion >= 0.010:
+        # ĐANG TRONG CỬ CHỈ:
+        # Duy trì ghi nhận chừng nào tay còn ở trên thắt lưng
+        if highest_wrist_y >= (waist_y + 0.04):
+            # Tay đã hạ hoàn toàn xuống dưới thắt lưng -> Kết thúc cử chỉ
+            return False, None
+
+        if motion >= 0.009:
             return True, None
         else:
             if still_since is None:
                 return True, now
-            elif (now - still_since) >= 0.65:
-                # Tay đã dừng yên 0.65s sau động tác -> Chốt cử chỉ
+            elif (now - still_since) >= 0.70:
+                # Tay dừng yên 0.70s trong không gian ký hiệu -> Chốt cử chỉ
                 return False, None
             else:
                 return True, still_since
@@ -238,7 +239,7 @@ class ClientAISession:
         self.session_id = session_id
         self.signer_name = signer_name or "Khách"
         self.pipeline = pipeline
-        self.tracker = SegmentTracker(pipeline.word_gap, pipeline.max_seconds, min_active_seconds=0.10)
+        self.tracker = SegmentTracker(pipeline.word_gap, pipeline.max_seconds, min_active_seconds=0.0)
         self.recorder = GestureVideoRecorder(
             record_dir=pipeline.record_dir,
             fps=30.0,
