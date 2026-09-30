@@ -724,7 +724,8 @@ class GestureVideoRecorder:
                     raw_writer.write(raw_frame)
                     last_rendered_raw = raw_frame
 
-            # 2. Ghi freeze-frame màn hình chẩn đoán sai số ở cuối video (~1.5s)
+            # 2. Ghi freeze-frame màn hình chẩn đoán sai số ở cuối video skeleton (~1.5s)
+            # (Video _raw.mp4 giữ nguyên 100% khung hình gốc sạch để đưa thẳng vào huấn luyện / benchmark)
             freeze_frame_count = max(10, int(actual_fps * 1.5))
 
             if skeleton_writer is not None:
@@ -736,16 +737,6 @@ class GestureVideoRecorder:
                 )
                 for _ in range(freeze_frame_count):
                     skeleton_writer.write(diag_skeleton)
-
-            if raw_writer is not None:
-                diag_raw = self._render_diagnostic_card(
-                    last_rendered_raw,
-                    task,
-                    left_ratio,
-                    right_ratio,
-                )
-                for _ in range(freeze_frame_count):
-                    raw_writer.write(diag_raw)
 
         finally:
             if skeleton_writer is not None:
