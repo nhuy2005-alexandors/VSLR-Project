@@ -72,8 +72,12 @@ document.addEventListener('DOMContentLoaded', () => {
   );
   const isDirectTunnel = window.location.hostname.endsWith('.trycloudflare.com');
   const isLocalPC = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  const DEFAULT_REMOTE_BACKEND = 'https://hdtv-news-rid-spa.trycloudflare.com';
-  const API_BASE = isLocalHost ? '' : (localStorage.getItem('vslr_backend_url') || DEFAULT_REMOTE_BACKEND);
+  const DEFAULT_REMOTE_BACKEND = 'https://ntbii305-vslr-backend.hf.space';
+  let API_BASE = isLocalHost ? '' : (localStorage.getItem('vslr_backend_url') || DEFAULT_REMOTE_BACKEND);
+
+  const AUTO_DISCOVERY_TOPIC = 'vslr_ctu_aws_active_backend_prod_v3';
+  const AUTO_DISCOVERY_POLL_URL = `https://ntfy.sh/${AUTO_DISCOVERY_TOPIC}/json?poll=1&since=24h`;
+  const AUTO_DISCOVERY_SSE_URL = `https://ntfy.sh/${AUTO_DISCOVERY_TOPIC}/sse`;
 
   // Sinh mã phiên ngẫu nhiên độc lập cho từng tab / thiết bị (Multi-tenant)
   const clientSessionId = sessionStorage.getItem('vslr_session_id') || ('sess_' + Math.random().toString(36).substring(2, 10));
@@ -1502,9 +1506,80 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // =========================================================================
-  // 10. INITIALIZATION
+  // 10. INITIALIZATION & REALTIME AUTO-DISCOVERY (TỰ ĐỘNG ĐỒNG BỘ LINK AWS)
   // =========================================================================
+  function applyDiscoveredBackend(newUrl) {
+    if (!newUrl || typeof newUrl !== 'string') return;
+    const cleaned = newUrl.trim().replace(/\/+$/, '');
+    if (!cleaned.startsWith('https://') && !cleaned.startsWith('http://')) return;
+    const changed = (cleaned !== API_BASE);
+    API_BASE = cleaned;
+    localStorage.setItem('vslr_backend_url', cleaned);
+    if (changed || !state.backendConnected) {
+      initEventStream();
+      if (state.cameraEnabled) {
+        startFrameStreamingLoop();
+      }
+    }
+  }
+
+  async function startAutoDiscovery() {
+    if (isLocalHost) {
+      setBackendStatusUI(true);
+      return;
+    }
+
+    // 1. Tự động lấy link Cloudflare mới nhất từ kho Auto-Discovery ngay khi vừa mở web
+    try {
+      const resp = await fetch(AUTO_DISCOVERY_POLL_URL, { cache: 'no-store' });
+      if (resp.ok) {
+        const text = await resp.text();
+        const lines = text.trim().split('\n');
+        let latestTime = -1;
+        let latestUrl = '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (
+              data.event === 'message' &&
+              data.message &&
+              data.message.startsWith('https://') &&
+              data.message.includes('.trycloudflare.com') &&
+              (data.time || 0) >= latestTime
+            ) {
+              latestTime = data.time || 0;
+              latestUrl = data.message.trim();
+            }
+          } catch (e) {}
+        }
+        if (latestUrl) {
+          applyDiscoveredBackend(latestUrl);
+        }
+      }
+    } catch (err) {}
+
+    // 2. Lắng nghe trực tiếp (Live SSE): Hễ bạn bật/khởi động lại AWS là web tự nhận link mới trong 0.2s (không cần F5!)
+    try {
+      const discoSource = new EventSource(AUTO_DISCOVERY_SSE_URL);
+      discoSource.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (
+            data.event === 'message' &&
+            data.message &&
+            data.message.startsWith('https://') &&
+            data.message.includes('.trycloudflare.com')
+          ) {
+            applyDiscoveredBackend(data.message.trim());
+          }
+        } catch (err) {}
+      };
+    } catch (e) {}
+  }
+
   updateCameraStateUI();
   initEventStream();
+  startAutoDiscovery();
 
 });

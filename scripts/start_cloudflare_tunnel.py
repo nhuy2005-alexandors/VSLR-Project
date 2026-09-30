@@ -123,14 +123,33 @@ def main() -> None:
                 if match:
                     public_url = match.group(0)
                     copy_to_clipboard(public_url)
-                    vercel_link = f"https://vslr-project-v3.vercel.app/?backend={public_url}"
+
+                    # Tự động đồng bộ lên Auto-Discovery Registry cho tên miền cố định Vercel
+                    def _sync_registry(t_url: str) -> None:
+                        reg_url = "https://ntfy.sh/vslr_ctu_aws_active_backend_prod_v3"
+                        try:
+                            req = urllib.request.Request(reg_url, data=t_url.encode("utf-8"), method="POST")
+                            urllib.request.urlopen(req, timeout=5.0)
+                        except Exception:
+                            pass
+                        while True:
+                            time.sleep(900)
+                            try:
+                                req = urllib.request.Request(reg_url, data=t_url.encode("utf-8"), method="POST")
+                                urllib.request.urlopen(req, timeout=5.0)
+                            except Exception:
+                                pass
+
+                    threading.Thread(target=_sync_registry, args=(public_url,), daemon=True).start()
+
+                    vercel_link = "https://vslr-project-v3.vercel.app"
                     print("\n" + "=" * 76)
                     print("🎉 HỆ THỐNG VSLR ĐÃ PUBLIC THÀNH CÔNG (TỐC ĐỘ 30 FPS NHƯ LOCALHOST!)")
                     print("=" * 76)
-                    print(f"👉 1. LINK GỬI BẠN BÈ (Đã tự động Copy vào Clipboard - Chỉ việc Ctrl+V):")
-                    print(f"      {public_url}")
-                    print(f"\n👉 2. HOẶC DÙNG QUA TÊN MIỀN VERCEL CỦA BẠN:")
+                    print(f"👉 1. TÊN MIỀN CỐ ĐỊNH CHÍNH THỨC (Tự động kết nối - Gửi bạn bè / Hội đồng):")
                     print(f"      {vercel_link}")
+                    print(f"\n👉 2. LINK CLOUDFLARE TRỰC TIẾP (Đã tự động Copy vào Clipboard):")
+                    print(f"      {public_url}")
                     print(f"\n👉 3. LINK TRÊN MÁY CỦA BẠN:")
                     print(f"      http://localhost:{port}")
                     print("-" * 76)

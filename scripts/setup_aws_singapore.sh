@@ -132,10 +132,32 @@ try:
             if m:
                 found_url = True
                 url = m.group(0)
+
+                def sync_to_vercel_registry(tunnel_url):
+                    import urllib.request
+                    reg_url = 'https://ntfy.sh/vslr_ctu_aws_active_backend_prod_v3'
+                    try:
+                        req = urllib.request.Request(reg_url, data=tunnel_url.encode('utf-8'), method='POST')
+                        urllib.request.urlopen(req, timeout=5.0)
+                    except Exception:
+                        pass
+                    while True:
+                        time.sleep(900)
+                        try:
+                            req = urllib.request.Request(reg_url, data=tunnel_url.encode('utf-8'), method='POST')
+                            urllib.request.urlopen(req, timeout=5.0)
+                        except Exception:
+                            pass
+
+                threading.Thread(target=sync_to_vercel_registry, args=(url,), daemon=True).start()
+
                 print('\n' + '='*74)
                 print('🎉 HỆ THỐNG VSLR ĐÃ CHẠY THÀNH CÔNG TRÊN AWS SINGAPORE! (PING 30ms)')
                 print('='*74)
-                print('👉 LINK TRUY CẬP CHÍNH THỨC DUY NHẤT (Mở trên Web / Gửi bạn bè):')
+                print('👉 1. TÊN MIỀN CỐ ĐỊNH CHÍNH THỨC (Mở trên Web / In vào Báo cáo / QR Code):')
+                print('      https://vslr-project-v3.vercel.app')
+                print('      (Đã tự động đồng bộ ngầm với đường hầm AWS của bạn - Không cần đổi link!)')
+                print('\n👉 2. ĐỊA CHỈ ĐƯỜNG HẦM CLOUDFLARE TRỰC TIẾP:')
                 print(f'      {url}')
                 print('='*74)
                 print('\n(Giữ nguyên cửa sổ terminal này để duy trì server. Nhấn Ctrl+C để dừng)\n')
