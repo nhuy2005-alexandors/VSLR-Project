@@ -67,18 +67,34 @@ def main() -> None:
     # 1. Tải trực tiếp từ Máy chủ AWS Singapore (Qua Auto-Discovery)
     aws_url = (args.backend_url or get_active_aws_url()).strip().rstrip("/")
     if aws_url:
-        q_signer = urllib.parse.quote(args.signer.strip()) if args.signer else ""
-        zip_endpoint = f"{aws_url}/api/recordings/zip?signer={q_signer}"
-        print(f"\n[1/2] Đang kết nối máy chủ AWS ({aws_url}) để tải video '{args.signer or 'tất cả'}'...")
-        try:
-            req = urllib.request.Request(zip_endpoint)
-            with urllib.request.urlopen(req, timeout=60.0) as resp:
-                zip_bytes = resp.read()
-                with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-                    zf.extractall(out_dir)
-                print(f"      ✓ Đã tải và giải nén thành công từ máy chủ AWS vào: {out_dir}")
-        except Exception as exc:
-            print(f"      [Thông báo AWS] {exc}")
+        print(f"\n[1/2] Đang kết nối máy chủ AWS ({aws_url})...")
+        signers_to_fetch: list[str] = []
+        if args.signer:
+            signers_to_fetch = [args.signer.strip()]
+        else:
+            try:
+                list_req = urllib.request.Request(f"{aws_url}/api/recordings/list")
+                with urllib.request.urlopen(list_req, timeout=10.0) as resp:
+                    list_data = json.loads(resp.read().decode("utf-8"))
+                    signers_to_fetch = [s["name"] for s in list_data.get("signers", []) if s.get("name")]
+            except Exception:
+                signers_to_fetch = [""]
+
+        display_names = ", ".join(signers_to_fetch) if signers_to_fetch else "tất cả"
+        print(f"      Tìm thấy người thử nghiệm: {display_names}")
+
+        for s_name in (signers_to_fetch or [""]):
+            q_signer = urllib.parse.quote(s_name) if s_name else ""
+            zip_endpoint = f"{aws_url}/api/recordings/zip?signer={q_signer}"
+            try:
+                req = urllib.request.Request(zip_endpoint)
+                with urllib.request.urlopen(req, timeout=120.0) as resp:
+                    zip_bytes = resp.read()
+                    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                        zf.extractall(out_dir)
+                    print(f"      ✓ Đã tải và giải nén thành công: '{s_name or 'toàn bộ'}' -> {out_dir}")
+            except Exception as exc:
+                print(f"      [Thông báo tải '{s_name}'] {exc}")
 
     # 2. Đồng bộ thêm từ Hugging Face Dataset (nếu có)
     token = (args.token or os.environ.get("HF_TOKEN") or "").strip()
