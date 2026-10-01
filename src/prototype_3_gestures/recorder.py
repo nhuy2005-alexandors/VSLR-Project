@@ -795,6 +795,55 @@ class GestureVideoRecorder:
                 commit_title=f"[{status_tag}] {task.signer_name}: {task.label} ({conf_tag})",
             )
 
+        # 5. Tự động đẩy ngầm lên Google Drive qua Webhook (nếu có cấu hình GDRIVE_WEBHOOK_URL)
+        gdrive_url = (os.environ.get("GDRIVE_WEBHOOK_URL") or "").strip()
+        if gdrive_url and gdrive_url.startswith("https://script.google.com/"):
+            files_for_drive = [meta_path] + [save_dir / name for name in saved_video_names if name.endswith("_raw.mp4")]
+            self._upload_to_gdrive_async(
+                webhook_url=gdrive_url,
+                folder_slug=rel_folder,
+                file_paths=files_for_drive,
+            )
+
+    def _upload_to_gdrive_async(
+        self,
+        webhook_url: str,
+        folder_slug: str,
+        file_paths: list[Path],
+    ) -> None:
+        """Đẩy video và JSON lên Google Drive qua Google Apps Script Webhook ở luồng ngầm (0ms ảnh hưởng camera)."""
+        def _gdrive_worker() -> None:
+            import base64
+            import requests
+
+            for fp in file_paths:
+                if not fp.is_file():
+                    continue
+                try:
+                    raw_bytes = fp.read_bytes()
+                    b64_str = base64.b64encode(raw_bytes).decode("ascii")
+                    mime = "video/mp4" if fp.name.endswith(".mp4") else "application/json"
+
+                    payload = {
+                        "folder": folder_slug,
+                        "filename": fp.name,
+                        "data": b64_str,
+                        "mimeType": mime,
+                    }
+
+                    resp = requests.post(webhook_url, json=payload, timeout=30.0)
+                    if resp.status_code == 200:
+                        try:
+                            res_json = resp.json()
+                            if res_json.get("status") == "success":
+                                print(f"[GOOGLE DRIVE] ✓ Đã tự động lưu '{fp.name}' lên Google Drive -> VSLR_Videos/{folder_slug}/")
+                        except Exception:
+                            pass
+                except Exception as exc:
+                    print(f"[GOOGLE DRIVE WARNING] Không thể đẩy '{fp.name}' lên Google Drive: {exc}", file=sys.stderr)
+
+        threading.Thread(target=_gdrive_worker, daemon=True, name="GDriveUploader").start()
+
     def _upload_to_huggingface_async(
         self,
         token: str,

@@ -70,9 +70,10 @@ if [ ! -f "cloudflared" ]; then
     chmod +x cloudflared
 fi
 
-# Cấu hình Token lưu dữ liệu Hugging Face Dataset
+# Cấu hình Token lưu dữ liệu Hugging Face Dataset & Google Drive Webhook
 export HF_TOKEN="${HF_TOKEN:-}"
 export HF_DATASET_REPO="${HF_DATASET_REPO:-ntbii305/vslr-remote}"
+export GDRIVE_WEBHOOK_URL="${GDRIVE_WEBHOOK_URL:-}"
 export PYTHONPATH="$PWD/src:$PYTHONPATH"
 
 # 5. Thiết lập dịch vụ chạy nền liên tục 24/7 (Systemd Service)
@@ -97,6 +98,7 @@ Environment="PATH=$PWD/venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="PYTHONPATH=$PWD/src"
 Environment="HF_TOKEN=${HF_TOKEN:-}"
 Environment="HF_DATASET_REPO=${HF_DATASET_REPO:-ntbii305/vslr-remote}"
+Environment="GDRIVE_WEBHOOK_URL=${GDRIVE_WEBHOOK_URL:-}"
 ExecStart=$PWD/venv/bin/python $PWD/scripts/run_aws_daemon.py
 Restart=always
 RestartSec=5
