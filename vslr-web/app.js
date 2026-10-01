@@ -868,10 +868,14 @@ document.addEventListener('DOMContentLoaded', () => {
         try { clientWs.close(); } catch (e) {}
       }
       const baseOrigin = API_BASE || window.location.origin;
+      const targetParam = (state.showTutorialPanel && state.targetGestureId && state.targetGestureId !== 'dich_tu_do')
+        ? `&target_gesture=${encodeURIComponent(state.targetGestureId)}`
+        : '&target_gesture=dich_tu_do';
       const wsUrl = baseOrigin.replace(/^http/, 'ws') +
         `/api/ws/client_feed?signer=${encodeURIComponent(state.signerName || 'Khách')}` +
         `&recognizing=${state.isRecognizing ? 1 : 0}` +
-        `&session_id=${encodeURIComponent(state.sessionId)}`;
+        `&session_id=${encodeURIComponent(state.sessionId)}` +
+        targetParam;
       clientWs = new WebSocket(wsUrl);
       clientWs.binaryType = 'arraybuffer';
       clientWs.onmessage = (evt) => {

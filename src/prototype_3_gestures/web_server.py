@@ -249,7 +249,7 @@ class ClientAISession:
         )
         self.sentence: list[str] = []
         self.is_recognizing: bool = False  # Mặc định bật camera chưa nhận diện liền
-        self.target_gesture: str | None = "xin_chao"  # Cử chỉ đang học / luyện tập
+        self.target_gesture: str | None = None  # None: tự động chia thư mục theo nhãn AI nhận diện
         self.decision_seq: int = 0
         self.latest_decision: dict[str, Any] = {}
         self.last_accepted_label: str | None = None
@@ -433,13 +433,20 @@ class ClientAISession:
                 self.recorder.cancel_gesture()
                 return
 
+        # Xác định thư mục lưu cử chỉ:
+        # - Nếu người dùng đang mở bài học cụ thể -> Lưu vào thư mục bài học đó
+        # - Nếu người dùng dịch tự do -> Tự động chia thư mục theo nhãn AI vừa nhận diện (decision.label)!
+        effective_target = self.target_gesture
+        if not effective_target or str(effective_target).strip().lower() in ("none", "null", "dich_tu_do"):
+            effective_target = decision.label
+
         if self.recorder.enabled:
             self.recorder.save_gesture(
                 decision,
                 labels=self.pipeline.labels,
                 duration=segment.duration,
                 signer_name=self.signer_name,
-                target_gesture=self.target_gesture or decision.label,
+                target_gesture=effective_target,
             )
 
         self.decision_seq += 1
@@ -601,7 +608,7 @@ class RealtimeVSLRPipeline:
         self.session_extractor_lock = threading.Lock()
         self.client_sessions: dict[str, ClientAISession] = {}
         self.recognition_enabled: bool = False
-        self.target_gesture: str | None = "xin_chao"
+        self.target_gesture: str | None = None
 
     def get_or_create_session(self, session_id: str, signer_name: str | None = None) -> ClientAISession:
         clean_id = (session_id or "").strip() or "default"
@@ -1562,13 +1569,15 @@ def create_app(
         signer: str = Query("Khách"),
         recognizing: bool = Query(False),
         session_id: str = Query("default"),
-        target_gesture: str = Query("xin_chao"),
+        target_gesture: str = Query(None),
     ):
         await websocket.accept()
         session = pipeline.get_or_create_session(session_id, signer_name=signer)
         session.is_recognizing = recognizing
-        if target_gesture:
-            session.target_gesture = target_gesture
+        if target_gesture and str(target_gesture).strip().lower() not in ("none", "null", "dich_tu_do"):
+            session.target_gesture = str(target_gesture).strip()
+        else:
+            session.target_gesture = None
 
         # Queue đệm tối đa 2 frame mới nhất (Zero-lag: tự động hủy frame cũ nếu mạng dồn toa)
         frame_queue: asyncio.Queue = asyncio.Queue(maxsize=2)
