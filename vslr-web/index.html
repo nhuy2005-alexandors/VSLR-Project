@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous">
-  <link rel="stylesheet" href="styles.css?v=4.0">
+  <link rel="stylesheet" href="styles.css?v=4.2">
 </head>
 <body>
 
@@ -100,6 +100,19 @@
               <span id="backendConnText">Thư mục lưu: <strong id="currentTargetFolderText">videos/xin_chao/</strong></span>
             </div>
           </div>
+        </div>
+
+        <!-- Translate Mode Switcher Tabs -->
+        <div class="translate-mode-switcher mb-3" id="translateModeSwitcher">
+          <button type="button" class="mode-tab-btn active" id="tabModeLiveCam" title="Sử dụng Webcam máy tính / điện thoại để dịch cử chỉ trực tiếp">
+            <span class="mode-tab-icon">📷</span>
+            <span>Camera Trực Tiếp</span>
+          </button>
+          <button type="button" class="mode-tab-btn" id="tabModeImportVideo" title="Tải file video lên hoặc chọn video mẫu để hệ thống AI nhận diện">
+            <span class="mode-tab-icon">📁</span>
+            <span>Tải Lên Video (Import Video)</span>
+            <span class="mode-tab-badge">Mới</span>
+          </button>
         </div>
 
         <!-- Practice Gesture Selector Bar (Mặc định thu gọn ở Chế độ Nhận diện 1 màn hình rộng) -->
@@ -257,6 +270,166 @@
 
         </div>
 
+        <!-- ======================================================== -->
+        <!-- SCREEN: IMPORT VIDEO RECOGNITION STUDIO                  -->
+        <!-- ======================================================== -->
+        <div class="video-import-studio" id="videoImportStudio" style="display: none; width: 100%;">
+
+          <div class="trans-card import-main-card">
+
+            <div class="card-column-header mb-3 flex-wrap gap-2">
+              <div>
+                <h2 class="card-column-title mb-1">📁 Nhận Diện Cử Chỉ Từ Video</h2>
+                <p class="text-muted small mb-0">Tải lên video cử chỉ (.mp4, .mov, .webm) hoặc thử nhanh với các video mẫu VSLR để AI phân tích.</p>
+              </div>
+              <span class="badge bg-primary-subtle text-primary-emphasis rounded-pill px-3 py-2 fw-semibold">MediaPipe Holistic v3 + BiLSTM</span>
+            </div>
+
+            <!-- Quick Samples Bar -->
+            <div class="import-samples-strip mb-3">
+              <span class="samples-title">💡 Thử nhanh video mẫu chuẩn VSLR:</span>
+              <div class="samples-pills-wrap" id="importSamplesWrap">
+                <button type="button" class="btn-sample-chip" data-sample-id="xin_chao">👋 Xin chào</button>
+                <button type="button" class="btn-sample-chip" data-sample-id="cam_on">🙏 Cảm ơn</button>
+                <button type="button" class="btn-sample-chip" data-sample-id="toi_khoe">💪 Tôi khỏe</button>
+                <button type="button" class="btn-sample-chip" data-sample-id="ban_ten_gi">🏷️ Bạn tên gì</button>
+                <button type="button" class="btn-sample-chip" data-sample-id="goi_xe_cuu_thuong">🚑 Gọi xe cứu thương</button>
+                <button type="button" class="btn-sample-chip" data-sample-id="ve_nha_can_than">🏠 Về nhà cẩn thận</button>
+                <button type="button" class="btn-sample-chip" data-sample-id="lau_roi_khong_gap">⏳ Lâu rồi không gặp</button>
+              </div>
+            </div>
+
+            <!-- Dropzone Area (Visible when no video loaded yet) -->
+            <div class="video-dropzone" id="videoDropzone">
+              <input type="file" id="videoFileInput" accept="video/mp4,video/quicktime,video/webm,video/avi,video/x-matroska" style="display: none;">
+              <div class="dropzone-inner">
+                <div class="dropzone-icon-circle">
+                  <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#009fe3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                </div>
+                <h3 class="dropzone-title">Kéo và thả file video vào đây</h3>
+                <p class="dropzone-desc">Hỗ trợ các định dạng <strong>MP4, MOV, WEBM, AVI</strong> (Khuyến nghị: video từ 1 - 5 giây, thấy rõ 2 tay & nửa thân trên)</p>
+                <button type="button" class="btn-pill-primary btn-sm px-4 py-2 mt-2" id="btnBrowseFile">
+                  📂 Chọn file video từ máy
+                </button>
+              </div>
+            </div>
+
+            <!-- Video Workspace (Visible once a video is selected or sample chosen) -->
+            <div class="import-workspace" id="importWorkspace" style="display: none;">
+
+              <div class="import-split-grid">
+
+                <!-- Left: Video Player & Source Info -->
+                <div class="import-player-col">
+                  <div class="import-video-frame">
+                    <video id="importVideoPlayer" playsinline loop controls preload="auto"></video>
+                  </div>
+
+                  <div class="import-file-meta-bar">
+                    <div class="file-meta-info">
+                      <span class="file-icon">🎬</span>
+                      <div class="text-truncate">
+                        <strong id="importFileNameText">video.mp4</strong>
+                        <span class="file-size-badge" id="importFileSizeBadge">-- MB</span>
+                      </div>
+                    </div>
+                    <button type="button" class="btn-change-video" id="btnChangeVideo" title="Chọn video khác">
+                      🔄 Đổi video
+                    </button>
+                  </div>
+
+                  <div class="import-actions-row">
+                    <button type="button" class="btn-pill-primary w-100 py-3" id="btnStartVideoRecognize">
+                      🚀 BẮT ĐẦU NHẬN DIỆN VIDEO
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Right: Analysis & Results Column -->
+                <div class="import-result-col">
+
+                  <!-- Standby State -->
+                  <div class="import-state-box standby-state" id="importStandbyBox">
+                    <div class="state-icon">🤖</div>
+                    <h4>Sẵn sàng phân tích cử chỉ</h4>
+                    <p class="small text-muted mb-0">Nhấn nút <strong>[BẮT ĐẦU NHẬN DIỆN VIDEO]</strong> để hệ thống trích xuất đặc trưng MediaPipe Holistic và phân loại cử chỉ qua mô hình BiLSTM.</p>
+                  </div>
+
+                  <!-- Loading / Analyzing State -->
+                  <div class="import-state-box analyzing-state" id="importAnalyzingBox" style="display: none;">
+                    <div class="analyzing-spinner"></div>
+                    <h4 class="mt-3 mb-1">Đang phân tích video...</h4>
+                    <p class="small text-muted mb-2" id="importAnalyzingStepText">Đang trích xuất khung xương MediaPipe Holistic v3...</p>
+                    <div class="analyzing-progress-bar">
+                      <div class="analyzing-progress-fill"></div>
+                    </div>
+                  </div>
+
+                  <!-- Result Showcase Card -->
+                  <div class="import-state-box result-state" id="importResultBox" style="display: none;">
+
+                    <div class="result-header-row">
+                      <span class="result-status-badge" id="importStatusBadge">✓ Nhận diện thành công</span>
+                      <span class="result-time-badge" id="importTimeBadge">⏱ 1.2s</span>
+                    </div>
+
+                    <div class="result-hero-display">
+                      <span class="result-hero-icon" id="importResultIcon">👋</span>
+                      <div class="result-hero-text">
+                        <div class="result-label-title" id="importResultLabel">Xin chào</div>
+                        <div class="result-cat-subtitle" id="importResultCat">Chủ đề: Giao tiếp • 24 Nhãn chuẩn VSLR</div>
+                      </div>
+                    </div>
+
+                    <div class="result-confidence-card">
+                      <div class="conf-card-head">
+                        <span>Độ tin cậy (Confidence):</span>
+                        <strong class="conf-score-text" id="importConfidenceText">97.6%</strong>
+                      </div>
+                      <div class="conf-progress-track">
+                        <div class="conf-progress-bar" id="importConfidenceBar" style="width: 97.6%;"></div>
+                      </div>
+                    </div>
+
+                    <!-- Action buttons -->
+                    <div class="result-action-buttons">
+                      <button type="button" class="btn-tts-speak py-2 px-3 flex-grow-1" id="btnImportSpeak">
+                        🔊 Nghe phát âm (Trúc Ly)
+                      </button>
+                      <button type="button" class="btn-pill-secondary py-2 px-3 flex-grow-1" id="btnImportAddToSentence">
+                        ➕ Thêm vào câu thoại
+                      </button>
+                    </div>
+
+                  </div>
+
+                  <!-- Error State -->
+                  <div class="import-state-box error-state" id="importErrorBox" style="display: none;">
+                    <div class="error-icon">⚠️</div>
+                    <h4 class="text-danger mb-2">Không thể nhận diện video</h4>
+                    <p class="small text-muted mb-3" id="importErrorMessage">Không tìm thấy đủ chuyển động bàn tay trong video.</p>
+                    <div class="alert alert-info py-2 px-3 small text-start mb-3" id="importErrorHint">
+                      💡 <strong>Mẹo:</strong> Hãy chọn video có người đứng trước máy quay từ thắt lưng trở lên, đủ ánh sáng và thực hiện cử chỉ rõ ràng.
+                    </div>
+                    <button type="button" class="pill-toggle-btn px-4 py-2" id="btnRetryImport">
+                      ↺ Thử lại video khác
+                    </button>
+                  </div>
+
+                </div>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
         <p class="model-footnote-text mt-3">
           Hệ thống nhận diện cử chỉ VSLR chuẩn hóa (BiLSTM + MediaPipe Holistic v3) — Đại học Cần Thơ.
         </p>
@@ -405,6 +578,6 @@
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
-  <script src="app.js?v=4.0"></script>
+  <script src="app.js?v=4.2"></script>
 </body>
 </html>

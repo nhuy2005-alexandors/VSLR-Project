@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Any
 
@@ -526,7 +527,7 @@ class HolisticExtractor:
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
         )
-        self._live = mp.solutions.holistic.Holistic(**self._config)
+        self._live: Any = None
         # Bộ nhớ đệm ngắn hạn để giữ điểm ngón tay không bị mất khi vung tay nhanh (motion blur)
         self._last_left_hand: Any = None
         self._last_right_hand: Any = None
@@ -537,7 +538,12 @@ class HolisticExtractor:
         self._max_persist_frames: int = 5
 
     def close(self) -> None:
-        self._live.close()
+        if self._live is not None:
+            try:
+                self._live.close()
+            except Exception:
+                pass
+            self._live = None
 
     def __enter__(self) -> "HolisticExtractor":
         return self
@@ -643,6 +649,8 @@ class HolisticExtractor:
         )
 
     def process_frame(self, frame_bgr: np.ndarray) -> FrameObservation:
+        if self._live is None:
+            self._live = mp.solutions.holistic.Holistic(**self._config)
         h, w = frame_bgr.shape[:2]
         if w > 320:
             scale_h = int(round(h * 320.0 / w))
@@ -674,7 +682,16 @@ class HolisticExtractor:
         except ClipExtractionError:
             cap.release()
             raise
-        stride = max(1, total_frames // 240) if total_frames > 0 else 1
+
+        # Adaptive stride tối ưu: Lấy mẫu ~15 FPS thay vì toàn bộ 30-60 FPS
+        # (resample_sequence của BiLSTM sẽ nội suy mượt mà lên target_len=60)
+        if total_frames > 0 and total_frames < 24:
+            stride = 1
+        else:
+            stride = max(1, int(round(fps / 15.0)))
+            if total_frames > 0 and (total_frames // stride) > 100:
+                stride = max(stride, int(math.ceil(total_frames / 100.0)))
+
         frames: list[np.ndarray] = []
         left_flags: list[bool] = []
         right_flags: list[bool] = []
@@ -690,6 +707,15 @@ class HolisticExtractor:
                 if not ok:
                     break
                 if frame_index % stride == 0:
+                    h, w = frame.shape[:2]
+                    max_dim = max(h, w)
+                    if max_dim > 480:
+                        scale = 480.0 / max_dim
+                        frame = cv2.resize(
+                            frame,
+                            (int(round(w * scale)), int(round(h * scale))),
+                            interpolation=cv2.INTER_LINEAR,
+                        )
                     obs = self._observe(frame, holistic)
                     frames.append(obs.features)
                     left_flags.append(obs.left_hand_present)

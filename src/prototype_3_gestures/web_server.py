@@ -6,7 +6,9 @@ import io
 import json
 import math
 import os
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -19,7 +21,17 @@ import cv2
 import numpy as np
 import soundfile as sf
 import torch
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,6 +54,7 @@ import mediapipe as mp
 
 from .vsl3.console import configure_utf8_stdio
 from .vsl3.features import (
+    ClipExtractionError,
     FEATURE_DIM,
     LANDMARK_FEATURE_DIM,
     LEFT_PRESENCE_INDEX,
@@ -1520,6 +1533,115 @@ def create_app(
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
+
+    # 7C. API Nhận diện cử chỉ từ File Video tải lên (Import Video)
+    @app.post("/api/recognize_video")
+    async def recognize_uploaded_video(
+        file: UploadFile = File(...),
+        signer: str = Form("Khách"),
+        session_id: str = Form("default"),
+        add_to_sentence: bool = Form(False),
+    ):
+        allowed_extensions = {".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v"}
+        orig_name = file.filename or "video.mp4"
+        ext = Path(orig_name).suffix.lower()
+        if ext not in allowed_extensions:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "detail": f"Định dạng video không được hỗ trợ: '{ext}'. Vui lòng tải file: {', '.join(sorted(allowed_extensions))}",
+                },
+                status_code=400,
+            )
+
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                temp_path = tmp.name
+                shutil.copyfileobj(file.file, tmp)
+
+            def _process_video_sync(v_path: str) -> dict[str, Any]:
+                with HolisticExtractor() as extractor:
+                    sequence, meta = extractor.extract_video(v_path, target_len=pipeline.seq_len)
+
+                label, confidence, probabilities = predict_sequence(
+                    pipeline.model, sequence, pipeline.labels, pipeline.device
+                )
+
+                accepted, reason = reject_prediction(
+                    confidence,
+                    probabilities,
+                    pipeline.policy,
+                    manual_threshold=pipeline.confidence_threshold,
+                    allow_uncalibrated=pipeline.allow_uncalibrated,
+                )
+
+                sorted_indices = np.argsort(probabilities)[::-1]
+                top_k = []
+                for rank, idx in enumerate(sorted_indices[:5]):
+                    prob = float(probabilities[int(idx)])
+                    top_k.append({
+                        "rank": rank + 1,
+                        "label": pipeline.labels[int(idx)],
+                        "confidence": round(prob * 100, 1),
+                        "probability": float(prob),
+                    })
+
+                return {
+                    "label": label,
+                    "confidence": round(float(confidence) * 100, 1),
+                    "accepted": bool(accepted),
+                    "reason": str(reason) if not accepted else "",
+                    "top_k": top_k,
+                    "meta": {
+                        "duration": round(float(meta.get("duration", 0)), 2),
+                        "sampled_frames": int(meta.get("sampled_frames", 0)),
+                        "target_len": int(pipeline.seq_len),
+                    },
+                }
+
+            res = await asyncio.to_thread(_process_video_sync, temp_path)
+
+            session = pipeline.get_or_create_session(session_id, signer_name=signer)
+            if add_to_sentence and res.get("accepted"):
+                session.sentence.append(res["label"])
+                session.last_accepted_label = res["label"]
+                session.last_accepted_time = time.monotonic()
+                pipeline.sentence = list(session.sentence)
+
+            res["status"] = "success"
+            res["filename"] = orig_name
+            res["signer"] = session.signer_name
+            res["sentence"] = list(session.sentence)
+            return res
+
+        except ClipExtractionError as exc:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "detail": str(exc),
+                    "hint": "Video không có đủ khung hình rõ nét hoặc không phát hiện được 2 bàn tay. Vui lòng chọn video có người thực hiện ký hiệu rõ ràng trước khung hình.",
+                },
+                status_code=422,
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "detail": f"Lỗi phân tích video: {exc}",
+                },
+                status_code=500,
+            )
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
+            try:
+                await file.close()
+            except Exception:
+                pass
 
     # 8. Client Frame Injection API (Webcam từ trình duyệt từ xa gửi về AI)
     @app.post("/api/client_frame")

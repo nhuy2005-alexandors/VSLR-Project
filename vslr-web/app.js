@@ -1600,6 +1600,339 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {}
   }
 
+  // =========================================================================
+  // 11. TRANSLATE MODE SWITCHER & VIDEO IMPORT RECOGNITION STUDIO
+  // =========================================================================
+  const tabModeLiveCam = document.getElementById('tabModeLiveCam');
+  const tabModeImportVideo = document.getElementById('tabModeImportVideo');
+  const videoImportStudio = document.getElementById('videoImportStudio');
+
+  // Video Import Elements
+  const videoDropzone = document.getElementById('videoDropzone');
+  const videoFileInput = document.getElementById('videoFileInput');
+  const btnBrowseFile = document.getElementById('btnBrowseFile');
+  const importSamplesWrap = document.getElementById('importSamplesWrap');
+  const importWorkspace = document.getElementById('importWorkspace');
+  const importVideoPlayer = document.getElementById('importVideoPlayer');
+  const importFileNameText = document.getElementById('importFileNameText');
+  const importFileSizeBadge = document.getElementById('importFileSizeBadge');
+  const btnChangeVideo = document.getElementById('btnChangeVideo');
+  const btnStartVideoRecognize = document.getElementById('btnStartVideoRecognize');
+  const importStandbyBox = document.getElementById('importStandbyBox');
+  const importAnalyzingBox = document.getElementById('importAnalyzingBox');
+  const importAnalyzingStepText = document.getElementById('importAnalyzingStepText');
+  const importResultBox = document.getElementById('importResultBox');
+  const importStatusBadge = document.getElementById('importStatusBadge');
+  const importTimeBadge = document.getElementById('importTimeBadge');
+  const importResultIcon = document.getElementById('importResultIcon');
+  const importResultLabel = document.getElementById('importResultLabel');
+  const importResultCat = document.getElementById('importResultCat');
+  const importConfidenceText = document.getElementById('importConfidenceText');
+  const importConfidenceBar = document.getElementById('importConfidenceBar');
+  const btnImportSpeak = document.getElementById('btnImportSpeak');
+  const btnImportAddToSentence = document.getElementById('btnImportAddToSentence');
+  const importErrorBox = document.getElementById('importErrorBox');
+  const importErrorMessage = document.getElementById('importErrorMessage');
+  const importErrorHint = document.getElementById('importErrorHint');
+  const btnRetryImport = document.getElementById('btnRetryImport');
+
+  let currentImportFile = null;
+  let currentImportFileName = '';
+  let currentVideoObjectUrl = null;
+  let lastRecognizedVideoLabel = '';
+
+  function switchTranslateMode(mode) {
+    if (mode === 'import') {
+      tabModeImportVideo?.classList.add('active');
+      tabModeLiveCam?.classList.remove('active');
+      if (practiceSelectorBar) practiceSelectorBar.style.setProperty('display', 'none', 'important');
+      if (practiceStudioBox) practiceStudioBox.style.display = 'none';
+      if (videoImportStudio) videoImportStudio.style.display = 'block';
+
+      // Nếu webcam đang chạy thì tạm dừng để tiết kiệm tài nguyên
+      if (state.cameraEnabled) {
+        stopClientWebcam();
+      }
+    } else {
+      tabModeLiveCam?.classList.add('active');
+      tabModeImportVideo?.classList.remove('active');
+      if (practiceSelectorBar) practiceSelectorBar.style.removeProperty('display');
+      if (practiceStudioBox) practiceStudioBox.style.display = '';
+      if (videoImportStudio) videoImportStudio.style.display = 'none';
+    }
+  }
+
+  tabModeLiveCam?.addEventListener('click', () => switchTranslateMode('live'));
+  tabModeImportVideo?.addEventListener('click', () => switchTranslateMode('import'));
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  function loadVideoFile(file, fileName) {
+    if (!file) return;
+    currentImportFile = file;
+    currentImportFileName = fileName || file.name || 'video.mp4';
+
+    if (currentVideoObjectUrl) {
+      URL.revokeObjectURL(currentVideoObjectUrl);
+    }
+    currentVideoObjectUrl = URL.createObjectURL(file);
+
+    if (importVideoPlayer) {
+      importVideoPlayer.src = currentVideoObjectUrl;
+      importVideoPlayer.currentTime = 0;
+      importVideoPlayer.load();
+    }
+
+    if (importFileNameText) importFileNameText.textContent = currentImportFileName;
+    if (importFileSizeBadge) importFileSizeBadge.textContent = file.size ? formatBytes(file.size) : 'Video file';
+
+    if (videoDropzone) videoDropzone.style.display = 'none';
+    if (importWorkspace) importWorkspace.style.display = 'block';
+
+    // Đưa các box trạng thái về ban đầu
+    if (importStandbyBox) importStandbyBox.style.display = 'flex';
+    if (importAnalyzingBox) importAnalyzingBox.style.display = 'none';
+    if (importResultBox) importResultBox.style.display = 'none';
+    if (importErrorBox) importErrorBox.style.display = 'none';
+  }
+
+  // Kéo và thả file video
+  if (videoDropzone) {
+    videoDropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      videoDropzone.classList.add('dragover');
+    });
+    videoDropzone.addEventListener('dragleave', () => {
+      videoDropzone.classList.remove('dragover');
+    });
+    videoDropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      videoDropzone.classList.remove('dragover');
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const file = e.dataTransfer.files[0];
+        loadVideoFile(file, file.name);
+      }
+    });
+    videoDropzone.addEventListener('click', (e) => {
+      if (e.target.closest('#btnBrowseFile') || e.target === videoDropzone || videoDropzone.contains(e.target)) {
+        videoFileInput?.click();
+      }
+    });
+  }
+
+  btnBrowseFile?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    videoFileInput?.click();
+  });
+
+  videoFileInput?.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      loadVideoFile(file, file.name);
+      videoFileInput.value = '';
+    }
+  });
+
+  // Chọn video mẫu thử nhanh
+  importSamplesWrap?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.btn-sample-chip');
+    if (!btn) return;
+    const sampleId = btn.dataset.sampleId;
+    if (!sampleId) return;
+
+    document.querySelectorAll('.btn-sample-chip').forEach(b => b.classList.toggle('active', b === btn));
+
+    const g = GESTURE_DATA.find(item => item.id === sampleId);
+    const videoUrl = g ? g.video : `tutorials/${sampleId}.mp4`;
+    const label = g ? g.name : sampleId;
+
+    try {
+      const res = await fetch(videoUrl);
+      if (!res.ok) throw new Error('Không thể tải file mẫu');
+      const blob = await res.blob();
+      const sampleFile = new File([blob], `${sampleId}.mp4`, { type: 'video/mp4' });
+      loadVideoFile(sampleFile, `Mẫu chuẩn: ${label} (${sampleId}.mp4)`);
+    } catch (err) {
+      console.warn('Fallback tải video mẫu trực tiếp vào player:', err);
+      if (importVideoPlayer) {
+        importVideoPlayer.src = videoUrl;
+        importVideoPlayer.load();
+      }
+      if (importFileNameText) importFileNameText.textContent = `Mẫu chuẩn: ${label} (${sampleId}.mp4)`;
+      if (importFileSizeBadge) importFileSizeBadge.textContent = 'Mẫu chuẩn VSLR';
+      if (videoDropzone) videoDropzone.style.display = 'none';
+      if (importWorkspace) importWorkspace.style.display = 'block';
+    }
+  });
+
+  function resetImportDropzone() {
+    if (currentVideoObjectUrl) {
+      URL.revokeObjectURL(currentVideoObjectUrl);
+      currentVideoObjectUrl = null;
+    }
+    currentImportFile = null;
+    currentImportFileName = '';
+    if (importVideoPlayer) {
+      importVideoPlayer.pause();
+      importVideoPlayer.removeAttribute('src');
+    }
+    if (importWorkspace) importWorkspace.style.display = 'none';
+    if (videoDropzone) videoDropzone.style.display = 'block';
+    document.querySelectorAll('.btn-sample-chip').forEach(b => b.classList.remove('active'));
+  }
+
+  btnChangeVideo?.addEventListener('click', resetImportDropzone);
+  btnRetryImport?.addEventListener('click', resetImportDropzone);
+
+  // Nhận diện Video
+  btnStartVideoRecognize?.addEventListener('click', async () => {
+    if (!currentImportFile) {
+      if (importVideoPlayer && importVideoPlayer.src) {
+        try {
+          const resp = await fetch(importVideoPlayer.src);
+          const b = await resp.blob();
+          currentImportFile = new File([b], 'sample.mp4', { type: 'video/mp4' });
+        } catch (e) {
+          alert('Vui lòng chọn hoặc tải lên một file video.');
+          return;
+        }
+      } else {
+        alert('Vui lòng chọn hoặc tải lên một file video.');
+        return;
+      }
+    }
+
+    if (btnStartVideoRecognize) btnStartVideoRecognize.disabled = true;
+
+    if (importStandbyBox) importStandbyBox.style.display = 'none';
+    if (importResultBox) importResultBox.style.display = 'none';
+    if (importErrorBox) importErrorBox.style.display = 'none';
+    if (importAnalyzingBox) importAnalyzingBox.style.display = 'flex';
+
+    if (importAnalyzingStepText) {
+      importAnalyzingStepText.textContent = '1/2: Trích xuất 203 đặc trưng MediaPipe Holistic v3...';
+    }
+    const stepTimer = setTimeout(() => {
+      if (importAnalyzingStepText) {
+        importAnalyzingStepText.textContent = '2/2: Suy luận mạng nơ-ron BiLSTM (24 nhãn VSLR)...';
+      }
+    }, 900);
+
+    const startTime = performance.now();
+
+    try {
+      const formData = new FormData();
+      formData.append('file', currentImportFile, currentImportFileName || 'video.mp4');
+      formData.append('signer', state.signerName || 'Khách');
+      formData.append('session_id', state.sessionId);
+      formData.append('add_to_sentence', 'false');
+
+      const response = await fetch(`${API_BASE}/api/recognize_video`, {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await response.json();
+      clearTimeout(stepTimer);
+      const elapsedSec = ((performance.now() - startTime) / 1000).toFixed(1);
+
+      if (importAnalyzingBox) importAnalyzingBox.style.display = 'none';
+
+      if (!response.ok || data.status === 'error') {
+        if (importErrorBox) importErrorBox.style.display = 'flex';
+        if (importErrorMessage) {
+          importErrorMessage.textContent = data.detail || data.message || 'Lỗi khi nhận diện video.';
+        }
+        if (importErrorHint && data.hint) {
+          importErrorHint.innerHTML = `💡 <strong>Mẹo:</strong> ${data.hint}`;
+        }
+        return;
+      }
+
+      lastRecognizedVideoLabel = data.label;
+      if (importResultBox) importResultBox.style.display = 'flex';
+
+      const matchedGesture = GESTURE_DATA.find(g =>
+        g.name.toLowerCase().trim() === data.label.toLowerCase().trim()
+      );
+
+      if (importResultIcon) importResultIcon.textContent = matchedGesture ? matchedGesture.icon : '✋';
+      if (importResultLabel) importResultLabel.textContent = data.label;
+      if (importResultCat) {
+        const cat = matchedGesture ? matchedGesture.cat : 'Giao tiếp';
+        const dur = data.meta && data.meta.duration ? `${data.meta.duration}s` : '1.5s';
+        importResultCat.textContent = `Chủ đề: ${cat} • Thời lượng: ${dur} • 24 Nhãn chuẩn VSLR`;
+      }
+
+      if (importStatusBadge) {
+        if (data.accepted) {
+          importStatusBadge.className = 'result-status-badge';
+          importStatusBadge.textContent = '✓ Nhận diện thành công';
+        } else {
+          importStatusBadge.className = 'result-status-badge rejected';
+          importStatusBadge.textContent = `⚠️ Nghi ngờ (${data.reason || 'Độ tin cậy thấp'})`;
+        }
+      }
+
+      if (importTimeBadge) importTimeBadge.textContent = `⏱ ${elapsedSec}s`;
+
+      if (importConfidenceText) importConfidenceText.textContent = `${data.confidence}%`;
+      if (importConfidenceBar) {
+        importConfidenceBar.style.width = `${Math.min(100, Math.max(5, data.confidence))}%`;
+        importConfidenceBar.style.background = data.confidence >= 70
+          ? 'linear-gradient(90deg, #10b981, #059669)'
+          : 'linear-gradient(90deg, #f59e0b, #d97706)';
+      }
+
+      // Phát âm ngay trên loa thiết bị
+      speakText(data.label);
+
+      // Cập nhật dải lịch sử nhận diện gần đây
+      pushRecentGesture(data.label, Math.round(data.confidence));
+
+    } catch (err) {
+      clearTimeout(stepTimer);
+      if (importAnalyzingBox) importAnalyzingBox.style.display = 'none';
+      if (importErrorBox) importErrorBox.style.display = 'flex';
+      if (importErrorMessage) {
+        importErrorMessage.textContent = `Không thể kết nối tới server AI: ${err.message}`;
+      }
+    } finally {
+      if (btnStartVideoRecognize) btnStartVideoRecognize.disabled = false;
+    }
+  });
+
+  btnImportSpeak?.addEventListener('click', () => {
+    if (lastRecognizedVideoLabel) {
+      lastSpokenTime = 0;
+      speakText(lastRecognizedVideoLabel);
+    }
+  });
+
+  btnImportAddToSentence?.addEventListener('click', () => {
+    if (lastRecognizedVideoLabel) {
+      state.sentence.push(lastRecognizedVideoLabel);
+      renderSentence();
+      if (btnImportAddToSentence) {
+        const origText = btnImportAddToSentence.textContent;
+        btnImportAddToSentence.textContent = '✓ Đã thêm vào câu!';
+        btnImportAddToSentence.style.background = '#ecfdf5';
+        btnImportAddToSentence.style.color = '#059669';
+        setTimeout(() => {
+          btnImportAddToSentence.textContent = origText;
+          btnImportAddToSentence.style.background = '';
+          btnImportAddToSentence.style.color = '';
+        }, 1500);
+      }
+    }
+  });
+
   updateCameraStateUI();
   initEventStream();
   startAutoDiscovery();
