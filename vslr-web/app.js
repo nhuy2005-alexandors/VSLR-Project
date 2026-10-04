@@ -1690,6 +1690,40 @@ document.addEventListener('DOMContentLoaded', () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 
+  let isTranscoding = false;
+
+  async function transcodeToWebH264(file) {
+    if (!file || isTranscoding) return;
+    isTranscoding = true;
+    const codecNotice = document.getElementById('importCodecNotice');
+    if (codecNotice) codecNotice.style.display = 'flex';
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file, file.name || 'video.mp4');
+      const resp = await fetch(`${API_BASE}/api/convert_video_preview`, {
+        method: 'POST',
+        body: formData
+      });
+      if (resp.ok) {
+        const blob = await resp.blob();
+        if (currentVideoObjectUrl) URL.revokeObjectURL(currentVideoObjectUrl);
+        currentVideoObjectUrl = URL.createObjectURL(blob);
+        if (importVideoPlayer) {
+          importVideoPlayer.src = currentVideoObjectUrl;
+          importVideoPlayer.currentTime = 0;
+          importVideoPlayer.load();
+          importVideoPlayer.play().catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.warn('Lỗi tự động chuyển mã preview video:', err);
+    } finally {
+      if (codecNotice) codecNotice.style.display = 'none';
+      isTranscoding = false;
+    }
+  }
+
   function loadVideoFile(file, fileName) {
     if (!file) return;
     currentImportFile = file;
@@ -1707,6 +1741,18 @@ document.addEventListener('DOMContentLoaded', () => {
       importVideoPlayer.src = currentVideoObjectUrl;
       importVideoPlayer.currentTime = 0;
       importVideoPlayer.load();
+    }
+
+    // Nếu là video thu từ OpenCV (thường có _raw.mp4, _skeleton.mp4 hoặc gắn nhãn REJECTED/ACCEPTED)
+    const isOpencvClip = /(_raw|_skeleton)\.mp4$/i.test(file.name) || /_(REJECTED|ACCEPTED)_/i.test(file.name);
+    if (isOpencvClip) {
+      transcodeToWebH264(file);
+    } else {
+      setTimeout(() => {
+        if (importVideoPlayer && importVideoPlayer.videoWidth === 0 && currentImportFile && !isTranscoding) {
+          transcodeToWebH264(currentImportFile);
+        }
+      }, 700);
     }
 
     if (importFileNameText) importFileNameText.textContent = currentImportFileName;
@@ -1810,8 +1856,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   importVideoPlayer?.addEventListener('error', () => {
-    const codecNotice = document.getElementById('importCodecNotice');
-    if (codecNotice && currentImportFile) codecNotice.style.display = 'flex';
+    if (currentImportFile && !isTranscoding) {
+      transcodeToWebH264(currentImportFile);
+    }
   });
 
   importVideoPlayer?.addEventListener('loadeddata', () => {

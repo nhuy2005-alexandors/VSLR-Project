@@ -4,6 +4,8 @@ import json
 import os
 import queue
 import re
+import shutil
+import subprocess
 import threading
 import time
 import unicodedata
@@ -743,6 +745,28 @@ class GestureVideoRecorder:
                 skeleton_writer.release()
             if raw_writer is not None:
                 raw_writer.release()
+
+        # Tự động tối ưu sang chuẩn H.264 để video xem trước được 100% trên mọi trình duyệt Web
+        if shutil.which("ffmpeg"):
+            for v_path in (skeleton_path, raw_path):
+                if v_path.is_file():
+                    tmp_t = v_path.with_name(f"tmp_h264_{v_path.name}")
+                    try:
+                        cmd = [
+                            "ffmpeg", "-y", "-i", str(v_path),
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+                            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                            "-an", str(tmp_t),
+                        ]
+                        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                        if r.returncode == 0 and tmp_t.is_file() and tmp_t.stat().st_size > 0:
+                            tmp_t.replace(v_path)
+                    except Exception:
+                        if tmp_t.is_file():
+                            try:
+                                tmp_t.unlink()
+                            except Exception:
+                                pass
 
         # 3. Lưu file metadata JSON cùng tên
         metadata = {

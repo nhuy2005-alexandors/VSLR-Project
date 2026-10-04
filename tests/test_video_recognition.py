@@ -66,3 +66,21 @@ def test_recognize_video_success(app_client):
     assert len(data["top_k"]) == 5
     assert data["top_k"][0]["label"] == "Xin chào"
     assert data["top_k"][0]["confidence"] >= data["top_k"][1]["confidence"]
+
+
+def test_convert_video_preview(app_client):
+    client, _ = app_client
+    video_path = Path("vslr-web/tutorials/xin_chao.mp4")
+    if not video_path.is_file():
+        pytest.skip(f"Sample video not found at {video_path}")
+
+    with open(video_path, "rb") as f:
+        video_bytes = f.read()
+
+    response = client.post(
+        "/api/convert_video_preview",
+        files={"file": ("raw_test.mp4", io.BytesIO(video_bytes), "video/mp4")},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "video/mp4"
+    assert len(response.content) > 1000

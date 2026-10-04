@@ -7,6 +7,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1533,6 +1534,72 @@ def create_app(
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
+
+    # 7B-2. API Chuyển mã video sang H.264 để hiển thị mượt mà trên trình duyệt Web (chống lỗi màn hình đen cho video OpenCV mp4v)
+    @app.post("/api/convert_video_preview")
+    async def convert_video_preview(file: UploadFile = File(...)):
+        allowed_extensions = {".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v"}
+        orig_name = file.filename or "video.mp4"
+        ext = Path(orig_name).suffix.lower()
+        if ext not in allowed_extensions:
+            return JSONResponse(
+                {"status": "error", "detail": f"Định dạng video không được hỗ trợ: '{ext}'"},
+                status_code=400,
+            )
+
+        temp_in = None
+        temp_out = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp_in:
+                temp_in = tmp_in.name
+                shutil.copyfileobj(file.file, tmp_in)
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_out:
+                temp_out = tmp_out.name
+
+            def _transcode_sync(src: str, dst: str) -> bytes | None:
+                if shutil.which("ffmpeg"):
+                    cmd = [
+                        "ffmpeg", "-y", "-i", src,
+                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+                        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                        "-an",
+                        dst,
+                    ]
+                    res = subprocess.run(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=30,
+                    )
+                    if res.returncode == 0 and os.path.exists(dst) and os.path.getsize(dst) > 0:
+                        with open(dst, "rb") as f_out:
+                            return f_out.read()
+                return None
+
+            h264_bytes = await asyncio.to_thread(_transcode_sync, temp_in, temp_out)
+            if not h264_bytes:
+                with open(temp_in, "rb") as f_orig:
+                    h264_bytes = f_orig.read()
+
+            return Response(
+                content=h264_bytes,
+                media_type="video/mp4",
+                headers={"Content-Disposition": f'inline; filename="preview_{Path(orig_name).stem}.mp4"'},
+            )
+        except Exception as exc:
+            return JSONResponse({"status": "error", "detail": str(exc)}, status_code=500)
+        finally:
+            for p in (temp_in, temp_out):
+                if p and os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except Exception:
+                        pass
+            try:
+                await file.close()
+            except Exception:
+                pass
 
     # 7C. API Nhận diện cử chỉ từ File Video tải lên (Import Video)
     @app.post("/api/recognize_video")
