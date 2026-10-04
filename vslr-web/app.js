@@ -1700,6 +1700,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     currentVideoObjectUrl = URL.createObjectURL(file);
 
+    const codecNotice = document.getElementById('importCodecNotice');
+    if (codecNotice) codecNotice.style.display = 'none';
+
     if (importVideoPlayer) {
       importVideoPlayer.src = currentVideoObjectUrl;
       importVideoPlayer.currentTime = 0;
@@ -1801,8 +1804,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (importWorkspace) importWorkspace.style.display = 'none';
     if (videoDropzone) videoDropzone.style.display = 'block';
+    const codecNotice = document.getElementById('importCodecNotice');
+    if (codecNotice) codecNotice.style.display = 'none';
     document.querySelectorAll('.btn-sample-chip').forEach(b => b.classList.remove('active'));
   }
+
+  importVideoPlayer?.addEventListener('error', () => {
+    const codecNotice = document.getElementById('importCodecNotice');
+    if (codecNotice && currentImportFile) codecNotice.style.display = 'flex';
+  });
+
+  importVideoPlayer?.addEventListener('loadeddata', () => {
+    const codecNotice = document.getElementById('importCodecNotice');
+    if (codecNotice) codecNotice.style.display = 'none';
+  });
 
   btnChangeVideo?.addEventListener('click', resetImportDropzone);
   btnRetryImport?.addEventListener('click', resetImportDropzone);
