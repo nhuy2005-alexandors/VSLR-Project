@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (practiceGestureSelect) {
     practiceGestureSelect.innerHTML = GESTURE_DATA.map((g, i) => `
-      <option value="${g.id}">${i + 1}/24: ${g.icon} ${g.name} (${g.cat})</option>
+      <option value="${g.id}">${i + 1}/24: ${g.name} (${g.cat})</option>
     `).join('');
     practiceGestureSelect.addEventListener('change', (e) => {
       const idx = GESTURE_DATA.findIndex(item => item.id === e.target.value);
@@ -1174,8 +1174,25 @@ document.addEventListener('DOMContentLoaded', () => {
           // Hoàn tất lưu video clip của người dùng để có thể bấm "Xem lại vừa làm"
           finishUserClipRecorder();
         } else {
+          // Khi nhận diện bị từ chối (reject): Vẫn hiển thị tên cử chỉ và số % trên màn hình webcam (Image #6)
+          if (heroPredictedWord) {
+            heroPredictedWord.style.opacity = '1.0';
+            heroPredictedWord.textContent = `${data.label} (Nghi ngờ)`;
+            heroPredictedWord.classList.add('pop');
+            setTimeout(() => heroPredictedWord.classList.remove('pop'), 250);
+          }
+          if (predConfVal) {
+            predConfVal.textContent = `${data.confidence}% (Từ chối)`;
+          }
+
           if (recStatusText) {
             recStatusText.textContent = `BỎ QUA: ${data.label} (${data.confidence}%) — ${data.reason}`;
+          }
+
+          const curG = GESTURE_DATA[state.targetGestureIndex];
+          if (practiceMatchBadge && curG) {
+            practiceMatchBadge.className = 'badge bg-warning text-dark rounded-pill px-3 py-2';
+            practiceMatchBadge.textContent = `⚠️ Nghi ngờ: ${data.label} (${data.confidence}%) — ${data.reason || 'Chưa đủ ngưỡng'}`;
           }
         }
         break;
